@@ -60,18 +60,29 @@ fn is_integration_test_cmd(subcommand: &str) -> bool {
     ) || (subcommand.ends_with(":test") || subcommand.ends_with("/test"))
 }
 
+/// Returns true if `s` is a scoped SBT task (e.g. `Test/test`, `it/Test/compile`).
+fn is_scoped_task(s: &str) -> bool {
+    !s.starts_with('-') && (s.contains('/') || s.contains(':'))
+}
+
 pub fn run_test(args: &[String], verbose: u8) -> Result<()> {
     let timer = tracking::TimedExecution::start();
 
     let mut cmd = resolved_command("sbt");
-    cmd.arg("test");
 
-    for arg in args {
+    // If caller passed a scoped task as first arg (e.g. "Test/test"), use it directly
+    // so sbt runs the right configuration scope.
+    let (sbt_task, rest) = match args.first() {
+        Some(a) if is_scoped_task(a) => (a.as_str(), &args[1..]),
+        _ => ("test", args),
+    };
+    cmd.arg(sbt_task);
+    for arg in rest {
         cmd.arg(arg);
     }
 
     if verbose > 0 {
-        eprintln!("Running: sbt test {}", args.join(" "));
+        eprintln!("Running: sbt {} {}", sbt_task, rest.join(" "));
     }
 
     let output = cmd
@@ -95,8 +106,8 @@ pub fn run_test(args: &[String], verbose: u8) -> Result<()> {
     }
 
     timer.track(
-        &format!("sbt test {}", args.join(" ")),
-        &format!("rtk sbt test {}", args.join(" ")),
+        &format!("sbt {} {}", sbt_task, rest.join(" ")),
+        &format!("rtk sbt {} {}", sbt_task, rest.join(" ")),
         &raw,
         &filtered,
     );
@@ -112,14 +123,18 @@ pub fn run_compile(args: &[String], verbose: u8) -> Result<()> {
     let timer = tracking::TimedExecution::start();
 
     let mut cmd = resolved_command("sbt");
-    cmd.arg("compile");
 
-    for arg in args {
+    let (sbt_task, rest) = match args.first() {
+        Some(a) if is_scoped_task(a) => (a.as_str(), &args[1..]),
+        _ => ("compile", args),
+    };
+    cmd.arg(sbt_task);
+    for arg in rest {
         cmd.arg(arg);
     }
 
     if verbose > 0 {
-        eprintln!("Running: sbt compile {}", args.join(" "));
+        eprintln!("Running: sbt {} {}", sbt_task, rest.join(" "));
     }
 
     let output = cmd
@@ -147,8 +162,8 @@ pub fn run_compile(args: &[String], verbose: u8) -> Result<()> {
     }
 
     timer.track(
-        &format!("sbt compile {}", args.join(" ")),
-        &format!("rtk sbt compile {}", args.join(" ")),
+        &format!("sbt {} {}", sbt_task, rest.join(" ")),
+        &format!("rtk sbt {} {}", sbt_task, rest.join(" ")),
         &raw,
         &filtered,
     );

@@ -1420,11 +1420,83 @@ where
     }
 }
 
+/// Strip SBT global flags (e.g. `-batch`) and normalize scoped tasks before Clap parsing.
+///
+/// SBT accepts global JVM/session flags before the task name. Claude routinely runs
+/// `sbt -batch Test/compile` or `sbt -batch it/Test/test`. Clap can't parse `-batch`
+/// (single-dash long flag) so these fall through to unfiltered passthrough without this.
+///
+/// Examples:
+///   `sbt -batch compile`          → `sbt compile`
+///   `sbt -batch Test/compile`     → `sbt compile Test/compile`
+///   `sbt -Dsbt.log.format=false Test/test` → `sbt test Test/test`
+fn preprocess_sbt_args(args: Vec<OsString>) -> Vec<OsString> {
+    if args.len() < 3 || args[1].to_str() != Some("sbt") {
+        return args;
+    }
+
+    let sbt_rest = &args[2..];
+
+    // Find the first arg that isn't a global flag
+    let subcmd_offset = sbt_rest
+        .iter()
+        .position(|a| !is_sbt_global_flag(a.to_str().unwrap_or("")));
+
+    let subcmd_offset = match subcmd_offset {
+        Some(i) => i,
+        None => return args, // only flags, no task — let Clap produce the error
+    };
+
+    let subcmd = sbt_rest[subcmd_offset].to_str().unwrap_or("").to_string();
+    let normalized = normalize_sbt_task(&subcmd);
+
+    // Nothing to change: no global flags stripped and task already matches
+    if subcmd_offset == 0 && normalized == subcmd {
+        return args;
+    }
+
+    // Rebuild: [rtk, sbt, <clap-subcommand>, <original-scoped-task-if-different>, ...rest]
+    let mut result = vec![args[0].clone(), args[1].clone()];
+    result.push(OsString::from(&normalized));
+    if normalized != subcmd {
+        // Keep the original scoped task (e.g. "Test/compile") as the first arg so
+        // run_compile / run_test can forward it verbatim to sbt.
+        result.push(OsString::from(&subcmd));
+    }
+    result.extend_from_slice(&sbt_rest[subcmd_offset + 1..]);
+    result
+}
+
+fn is_sbt_global_flag(s: &str) -> bool {
+    matches!(
+        s,
+        "-batch" | "--batch" | "-no-colors" | "--no-colors" | "--color=false"
+    ) || s.starts_with("-D")
+        || s.starts_with("-J")
+        || s.starts_with("--color=")
+}
+
+/// Map a (possibly scoped) SBT task to its Clap subcommand name.
+/// `Test/compile` → `"compile"`, `it/Test/test` → `"test"`, `compile` → `"compile"`.
+fn normalize_sbt_task(task: &str) -> String {
+    let base = task
+        .rsplit('/')
+        .next()
+        .or_else(|| task.rsplit(':').next())
+        .unwrap_or(task);
+    match base {
+        "compile" | "Compile" => "compile".to_string(),
+        "test" | "Test" => "test".to_string(),
+        "run" | "Run" => "run".to_string(),
+        _ => task.to_string(),
+    }
+}
+
 fn run_cli() -> Result<i32> {
     // Fire-and-forget telemetry ping (1/day, non-blocking)
     core::telemetry::maybe_ping();
 
-    let cli = match Cli::try_parse() {
+    let cli = match Cli::try_parse_from(preprocess_sbt_args(std::env::args_os().collect())) {
         Ok(cli) => cli,
         Err(e) => {
             if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) {
@@ -3258,6 +3330,83 @@ mod tests {
                 assert!(global);
             }
             _ => panic!("Expected Init command"),
+        }
+    }
+
+    fn os_args(args: &[&str]) -> Vec<OsString> {
+        args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn test_preprocess_sbt_batch_compile() {
+        let input = os_args(&["rtk", "sbt", "-batch", "compile"]);
+        let result = preprocess_sbt_args(input);
+        assert_eq!(result, os_args(&["rtk", "sbt", "compile"]));
+    }
+
+    #[test]
+    fn test_preprocess_sbt_batch_scoped_compile() {
+        let input = os_args(&["rtk", "sbt", "-batch", "Test/compile"]);
+        let result = preprocess_sbt_args(input);
+        assert_eq!(result, os_args(&["rtk", "sbt", "compile", "Test/compile"]));
+    }
+
+    #[test]
+    fn test_preprocess_sbt_batch_integration_compile() {
+        let input = os_args(&["rtk", "sbt", "-batch", "it/Test/compile"]);
+        let result = preprocess_sbt_args(input);
+        assert_eq!(
+            result,
+            os_args(&["rtk", "sbt", "compile", "it/Test/compile"])
+        );
+    }
+
+    #[test]
+    fn test_preprocess_sbt_batch_test() {
+        let input = os_args(&["rtk", "sbt", "-batch", "Test/test"]);
+        let result = preprocess_sbt_args(input);
+        assert_eq!(result, os_args(&["rtk", "sbt", "test", "Test/test"]));
+    }
+
+    #[test]
+    fn test_preprocess_sbt_scoped_no_batch() {
+        let input = os_args(&["rtk", "sbt", "Test/compile"]);
+        let result = preprocess_sbt_args(input);
+        assert_eq!(result, os_args(&["rtk", "sbt", "compile", "Test/compile"]));
+    }
+
+    #[test]
+    fn test_preprocess_sbt_plain_compile_unchanged() {
+        let input = os_args(&["rtk", "sbt", "compile"]);
+        let result = preprocess_sbt_args(input);
+        assert_eq!(result, os_args(&["rtk", "sbt", "compile"]));
+    }
+
+    #[test]
+    fn test_preprocess_sbt_dsbt_flag() {
+        let input = os_args(&["rtk", "sbt", "-Dsbt.log.noformat=true", "compile"]);
+        let result = preprocess_sbt_args(input);
+        assert_eq!(result, os_args(&["rtk", "sbt", "compile"]));
+    }
+
+    #[test]
+    fn test_preprocess_non_sbt_unchanged() {
+        let input = os_args(&["rtk", "cargo", "test"]);
+        let result = preprocess_sbt_args(input);
+        assert_eq!(result, os_args(&["rtk", "cargo", "test"]));
+    }
+
+    #[test]
+    fn test_preprocess_sbt_batch_routes_to_clap() {
+        let args = preprocess_sbt_args(os_args(&["rtk", "sbt", "-batch", "Test/compile"]));
+        let cli = Cli::try_parse_from(args).unwrap();
+        match cli.command {
+            Commands::Sbt {
+                command: SbtCommands::Compile { args },
+            } => {
+                assert_eq!(args, vec!["Test/compile"]);
+            }
+            _ => panic!("Expected Sbt Compile"),
         }
     }
 }
