@@ -46,6 +46,10 @@ lazy_static! {
     /// Module banner with project name in brackets.
     static ref MODULE_BANNER: Regex = Regex::new(r"^\[INFO\] -+< .+ >-+$").unwrap();
 
+    /// Reactor summary header that opens the per-module pass/fail block at
+    /// the end of a multi-module build.
+    static ref REACTOR_SUMMARY: Regex = Regex::new(r"^\[INFO\] Reactor Summary for ").unwrap();
+
     /// Compile-error coordinate substring to strip when deduping warnings/errors.
     static ref FILE_COORD: Regex = Regex::new(r"/[^:]+\.java:\[\d+,\d+\]").unwrap();
 }
@@ -123,6 +127,27 @@ fn has_english_footer(stripped: &str) -> bool {
 }
 
 // ── Outside-block keep list (shared by surefire + package) ──────────────────
+
+/// Multi-module reactor summary keeper. Reads `in_reactor_summary` and toggles
+/// it on `[INFO] Reactor Summary for …` (enter) and `BUILD SUCCESS`/`BUILD
+/// FAILURE` (exit). Returns `true` for every line while the flag is set so the
+/// per-module status rows (`[INFO] foo ...... SUCCESS [  1.234 s]`, plain
+/// `[INFO]` separators inside the summary, etc.) survive. Returns `false`
+/// otherwise — the caller's outside-block keep-list still applies.
+///
+/// Designed to be called **before** `keep_outside_block` so the `BUILD_FOOT`
+/// clears-flag side effect always runs regardless of `||` short-circuit.
+fn reactor_summary_keep(line: &str, in_reactor_summary: &mut bool) -> bool {
+    if REACTOR_SUMMARY.is_match(line) {
+        *in_reactor_summary = true;
+        return true;
+    }
+    if BUILD_FOOT.is_match(line) {
+        *in_reactor_summary = false;
+        return false;
+    }
+    *in_reactor_summary
+}
 
 fn keep_outside_block(line: &str) -> bool {
     RESULTS.is_match(line)
@@ -317,6 +342,7 @@ pub fn filter_surefire(raw: &str) -> String {
     let mut out = String::new();
     let mut block = SurefireBlock::new();
     let mut keep_continuation = false;
+    let mut in_reactor_summary = false;
 
     for line in stripped.lines() {
         match block.step(line, &mut out) {
@@ -339,7 +365,10 @@ pub fn filter_surefire(raw: &str) -> String {
             continue;
         }
 
-        if keep_outside_block(line) {
+        // Order matters: call reactor_summary_keep first so its BUILD_FOOT
+        // clears-flag side effect always runs regardless of `||` short-circuit.
+        let reactor_keep = reactor_summary_keep(line, &mut in_reactor_summary);
+        if reactor_keep || keep_outside_block(line) {
             out.push_str(line);
             out.push('\n');
             keep_continuation = line.starts_with("[ERROR]")
@@ -436,6 +465,7 @@ pub fn filter_package(raw: &str) -> String {
     let mut out = String::new();
     let mut block = SurefireBlock::new();
     let mut keep_continuation = false;
+    let mut in_reactor_summary = false;
     let mut seen_warnings: HashSet<String> = HashSet::new();
 
     for line in stripped.lines() {
@@ -453,8 +483,11 @@ pub fn filter_package(raw: &str) -> String {
             SurefireStep::Passthrough => {}
         }
 
+        // Order matters: call reactor_summary_keep first so its BUILD_FOOT
+        // clears-flag side effect always runs regardless of `||` short-circuit.
+        let reactor_keep = reactor_summary_keep(line, &mut in_reactor_summary);
         // Outside any Surefire block: compile-keep AND surefire-outside-keep merge.
-        if MODULE_BANNER.is_match(line) || keep_outside_block(line) {
+        if reactor_keep || MODULE_BANNER.is_match(line) || keep_outside_block(line) {
             out.push_str(line);
             out.push('\n');
             keep_continuation = line.starts_with("[ERROR]")
@@ -1024,6 +1057,74 @@ mod tests {
             o.contains("there is no POM"),
             "no-pom error preserved; got:\n{}",
             o
+        );
+    }
+
+    // ── Multi-module reactor summary ─────────────────────────────────────────
+
+    /// `mvn install` on a multi-module reactor build that passes everywhere
+    /// must preserve the `Reactor Summary for <root>` header and the per-module
+    /// `[INFO] foo ...... SUCCESS [ 1.234 s]` rows.
+    #[test]
+    fn reactor_summary_kept_on_multi_module_pass() {
+        let i = include_str!("../../../tests/fixtures/mvn_reactor_pass_slice_raw.txt");
+        let o = filter_package(i);
+        assert!(
+            o.contains("Reactor Summary for multi-module-skeleton"),
+            "reactor summary header preserved; got:\n{}",
+            o
+        );
+        assert!(
+            o.contains("[INFO] child-a ............................................ SUCCESS"),
+            "per-module SUCCESS row preserved; got:\n{}",
+            o
+        );
+        assert!(
+            o.contains("[INFO] child-b ............................................ SUCCESS"),
+            "second per-module SUCCESS row preserved; got:\n{}",
+            o
+        );
+        assert!(
+            o.contains("BUILD SUCCESS"),
+            "footer preserved; got:\n{}",
+            o
+        );
+    }
+
+    /// `mvn install` on a multi-module reactor build where one module fails
+    /// must preserve the Reactor Summary with the `FAILURE` row plus the
+    /// `[ERROR] Failed to execute goal …` terminator that already survives
+    /// via `keep_outside_block`.
+    #[test]
+    fn reactor_summary_kept_on_multi_module_fail() {
+        let i = include_str!("../../../tests/fixtures/mvn_reactor_fail_slice_raw.txt");
+        let o = filter_package(i);
+        assert!(
+            o.contains("Reactor Summary for multi-module-skeleton"),
+            "reactor summary header preserved; got:\n{}",
+            o
+        );
+        assert!(
+            o.contains("child-a ............................................ SUCCESS"),
+            "successful module row preserved; got:\n{}",
+            o
+        );
+        assert!(
+            o.contains("child-b ............................................ FAILURE"),
+            "failing module row preserved; got:\n{}",
+            o
+        );
+        assert!(o.contains("BUILD FAILURE"), "footer preserved; got:\n{}", o);
+        assert!(
+            o.contains("[ERROR] Failed to execute goal"),
+            "goal terminator preserved; got:\n{}",
+            o
+        );
+        let savings = 100.0 - (count_tokens(&o) as f64 / count_tokens(i) as f64 * 100.0);
+        assert!(
+            savings >= 30.0,
+            "reactor-fail slice savings >=30% (short fixture); got {:.1}%",
+            savings
         );
     }
 
