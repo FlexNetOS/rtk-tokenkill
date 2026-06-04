@@ -604,22 +604,32 @@ fn droid_response_for_verdict(v: &Value, cmd: &str, verdict: PermissionVerdict) 
         ti
     };
 
-    // Droid (like Cursor) only applies a hook's `updatedInput` when the
-    // permission decision is "allow" — an "ask"/omitted decision makes Droid
-    // run the *original* command, so the rewrite (and its token savings) would
-    // be silently dropped. We already stepped aside on Deny above, so anything
-    // reaching here is safe to auto-allow in its rewritten `rtk …` form (it is
-    // the same command the agent chose, just wrapped). Mirrors `run_cursor`.
-    let decision = "allow";
+    // Wire format mirrors Claude's `hookSpecificOutput`; the allow policy mirrors
+    // `process_claude_payload`, NOT Cursor. Verified empirically against Droid
+    // 0.140.0: Droid applies a hook's `updatedInput` regardless of the permission
+    // decision — beyond the `case "allow"` branch it has an "updated input result"
+    // path that applies any hook's `updatedInput` even when no decision is set. So
+    // forcing "allow" is unnecessary for the rewrite to land, and would be harmful:
+    // Droid resolves the decision as `find(first result with a permissionDecision)`
+    // (no deny-over-allow priority), so an unconditional "allow" can suppress
+    // another PreToolUse hook's deny/ask and bypasses Droid's native permission
+    // prompt. We therefore only assert "allow" on an explicit allow rule; otherwise
+    // we omit the decision so the rewrite still applies while the user's other
+    // hooks and Droid's native prompt stay in control.
+    let mut hook_output = json!({
+        "hookEventName": PRE_TOOL_USE_KEY,
+        "permissionDecisionReason": "RTK auto-rewrite",
+        "updatedInput": updated_input
+    });
 
-    Some(json!({
-        "hookSpecificOutput": {
-            "hookEventName": PRE_TOOL_USE_KEY,
-            "permissionDecision": decision,
-            "permissionDecisionReason": "RTK auto-rewrite",
-            "updatedInput": updated_input
-        }
-    }))
+    if verdict == PermissionVerdict::Allow {
+        hook_output
+            .as_object_mut()
+            .unwrap()
+            .insert("permissionDecision".into(), json!("allow"));
+    }
+
+    Some(json!({ "hookSpecificOutput": hook_output }))
 }
 
 /// Run the Factory Droid PreToolUse hook natively.
@@ -1538,14 +1548,15 @@ mod tests {
                 .and_then(|c| c.as_str()),
             Some("PreToolUse")
         );
-        // Default verdict (no rule) must still auto-allow: Droid only applies
-        // `updatedInput` when the decision is "allow", otherwise it runs the
-        // original command and the rewrite is silently dropped.
-        assert_eq!(
+        // Default verdict (no rule) must OMIT permissionDecision. Verified
+        // against Droid 0.140.0: `updatedInput` is applied regardless of the
+        // decision, so omitting it lets the rewrite land while preserving
+        // Droid's native prompt and other hooks' deny/ask (Droid picks the
+        // first hook result that sets a decision). Mirrors the Claude handler.
+        assert!(
             v.pointer("/hookSpecificOutput/permissionDecision")
-                .and_then(|c| c.as_str()),
-            Some("allow"),
-            "rewrites must be auto-allowed so Droid applies updatedInput"
+                .is_none(),
+            "default verdict must not force a permission decision"
         );
     }
 
