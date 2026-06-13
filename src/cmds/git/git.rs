@@ -193,10 +193,10 @@ fn run_diff(
 
     let mut final_output = result.stdout.clone();
     if !diff_result.stdout.is_empty() {
-        println!("\n--- Changes ---");
+        println!("\nChanges:");
         let compacted = compact_diff(&diff_result.stdout, max_lines.unwrap_or(500));
         println!("{}", compacted);
-        final_output.push_str("\n--- Changes ---\n");
+        final_output.push_str("\nChanges:\n");
         final_output.push_str(&compacted);
     }
 
@@ -305,7 +305,7 @@ fn run_show(
     let mut final_output = summary_result.stdout.clone();
     if !diff_text.is_empty() {
         if verbose > 0 {
-            println!("\n--- Changes ---");
+            println!("\nChanges:");
         }
         let compacted = compact_diff(diff_text, max_lines.unwrap_or(500));
         println!("{}", compacted);
@@ -987,6 +987,24 @@ fn build_commit_command(args: &[String], global_args: &[String]) -> Command {
     cmd
 }
 
+/// Parse the first line of `git commit` success output and return a compact token.
+/// Handles: `[main abc1234def] message`, `[main (root-commit) abc1234def] msg`,
+/// localized variants, and multibyte branch names.
+fn parse_commit_output(line: &str) -> String {
+    if let Some(bracket_end) = line.find(']') {
+        let bracket_content = &line[1..bracket_end];
+        let hash = bracket_content.split_whitespace().next_back().unwrap_or("");
+        if !hash.is_empty() && hash.len() >= 7 {
+            let short_hash: String = hash.chars().take(7).collect();
+            format!("ok {}", short_hash)
+        } else {
+            "ok".to_string()
+        }
+    } else {
+        "ok".to_string()
+    }
+}
+
 fn run_commit(args: &[String], verbose: u8, global_args: &[String]) -> Result<i32> {
     let timer = tracking::TimedExecution::start();
 
@@ -1008,17 +1026,10 @@ fn run_commit(args: &[String], verbose: u8, global_args: &[String]) -> Result<i3
 
     if output.status.success() {
         // Extract commit hash from output like "[main abc1234] message"
+        // or "[main (root-commit) abc1234] message" (incl. localized variants)
+        // The hash is always the last whitespace-separated token before ']'.
         let compact = if let Some(line) = stdout.lines().next() {
-            if let Some(hash_start) = line.find(' ') {
-                let hash = line[1..hash_start].split(' ').next_back().unwrap_or("");
-                if !hash.is_empty() && hash.len() >= 7 {
-                    format!("ok {}", &hash[..7.min(hash.len())])
-                } else {
-                    "ok".to_string()
-                }
-            } else {
-                "ok".to_string()
-            }
+            parse_commit_output(line)
         } else {
             "ok".to_string()
         };
@@ -2370,6 +2381,52 @@ no changes added to commit (use "git add" and/or "git commit -a")
         let porcelain = "## main\nA  🎉-party.txt\n M 日本語ファイル.rs\n";
         let result = format_status_output(porcelain);
         assert!(result.contains("* main"));
+    }
+
+    // --- commit output parsing ---
+
+    #[test]
+    fn test_parse_commit_output_normal() {
+        let line = "[main abc1234def] add feature";
+        assert_eq!(parse_commit_output(line), "ok abc1234");
+    }
+
+    #[test]
+    fn test_parse_commit_output_root_commit() {
+        let line = "[main (root-commit) abc1234def] initial commit";
+        assert_eq!(parse_commit_output(line), "ok abc1234");
+    }
+
+    /// Regression test: multibyte branch name must not panic (was byte-slicing before fix)
+    #[test]
+    fn test_parse_commit_output_multibyte_branch() {
+        let line = "[分支名 abc1234def] 提交消息";
+        assert_eq!(parse_commit_output(line), "ok abc1234");
+    }
+
+    /// Regression test: Thai branch name (3 bytes per char)
+    #[test]
+    fn test_parse_commit_output_thai_branch() {
+        let line = "[สาขา abc1234def] commit message";
+        assert_eq!(parse_commit_output(line), "ok abc1234");
+    }
+
+    #[test]
+    fn test_parse_commit_output_no_bracket() {
+        let line = "some other output";
+        assert_eq!(parse_commit_output(line), "ok");
+    }
+
+    #[test]
+    fn test_parse_commit_output_short_hash() {
+        // Hash shorter than 7 chars — treat as "ok" (no hash shown)
+        let line = "[main abc12] message";
+        assert_eq!(parse_commit_output(line), "ok");
+    }
+
+    #[test]
+    fn test_parse_commit_output_empty() {
+        assert_eq!(parse_commit_output(""), "ok");
     }
 
     /// Regression test: --oneline and other user format flags must preserve all commits.
