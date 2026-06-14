@@ -13,42 +13,42 @@ use std::collections::HashMap;
 /// Includes all rg short flags that take a value argument except `-e` and `-r`
 /// (stripped) and `-E` (dialect, left to #2138). Failure mode for a missing
 /// entry: the value becomes a positional (visible wrong result, not silent).
-const VALUE_FLAGS_SHORT: &[u8] = b"ABCgfjmtTdM";
+const VALUE_FLAGS_SHORT: &[u8] = b"ABCMTdfgjmt";
 
 /// Long flags that consume the NEXT token as their value (space-separated form).
 /// Inline `=` form (`--flag=value`) is one token and passes through unchanged.
 /// `--regexp` is handled separately (its value goes to `patterns`).
 /// `--encoding` value is consumed correctly here; dialect routing is #2138's job.
 const VALUE_FLAGS_LONG: &[&str] = &[
+    "--after-context",
+    "--before-context",
+    "--color",
+    "--colors",
+    "--context",
+    "--context-separator",
+    "--encoding",
+    "--engine",
+    "--field-context-separator",
+    "--field-match-separator",
     "--file",
     "--glob",
     "--iglob",
-    "--type",
-    "--type-not",
-    "--type-add",
-    "--type-clear",
+    "--ignore-file",
+    "--max-columns",
     "--max-count",
     "--max-depth",
     "--max-filesize",
-    "--max-columns",
-    "--after-context",
-    "--before-context",
-    "--context",
-    "--encoding",
-    "--engine",
+    "--path-separator",
+    "--pre",
+    "--pre-glob",
+    "--replace",
     "--sort",
     "--sortr",
     "--threads",
-    "--replace",
-    "--pre",
-    "--pre-glob",
-    "--path-separator",
-    "--ignore-file",
-    "--field-match-separator",
-    "--field-context-separator",
-    "--context-separator",
-    "--color",
-    "--colors",
+    "--type",
+    "--type-add",
+    "--type-clear",
+    "--type-not",
 ];
 
 /// Result of parsing the content of a short flag cluster (the part after `-`).
@@ -629,10 +629,22 @@ mod tests {
         assert_eq!(parse_cluster("r"), ClusterResult::Boolean(None));
         assert_eq!(parse_cluster("R"), ClusterResult::Boolean(None));
         assert_eq!(parse_cluster("rR"), ClusterResult::Boolean(None));
-        assert_eq!(parse_cluster("rn"), ClusterResult::Boolean(Some("n".to_string())));
-        assert_eq!(parse_cluster("Rni"), ClusterResult::Boolean(Some("ni".to_string())));
-        assert_eq!(parse_cluster("n"), ClusterResult::Boolean(Some("n".to_string())));
-        assert_eq!(parse_cluster("ni"), ClusterResult::Boolean(Some("ni".to_string())));
+        assert_eq!(
+            parse_cluster("rn"),
+            ClusterResult::Boolean(Some("n".to_string()))
+        );
+        assert_eq!(
+            parse_cluster("Rni"),
+            ClusterResult::Boolean(Some("ni".to_string()))
+        );
+        assert_eq!(
+            parse_cluster("n"),
+            ClusterResult::Boolean(Some("n".to_string()))
+        );
+        assert_eq!(
+            parse_cluster("ni"),
+            ClusterResult::Boolean(Some("ni".to_string()))
+        );
     }
 
     #[test]
