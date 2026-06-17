@@ -3909,7 +3909,7 @@ git status                 rtk git status
 git log -10                rtk git log -10
 cargo test                 rtk cargo test
 docker ps                  rtk docker ps
-kubectl get pods           rtk kubectl pods
+kubectl get pods           rtk kubectl get pods
 ```
 
 ## Meta commands (use directly)
@@ -6887,6 +6887,22 @@ mod tests {
             !hook_path.exists(),
             "Hook config must not be written when the upsert aborts: {}",
             hook_path.display()
+        );
+    }
+
+    #[test]
+    fn test_copilot_instructions_kubectl_get_not_dropped() {
+        // Regression: COPILOT_INSTRUCTIONS template previously translated
+        // 'kubectl get pods' to 'rtk kubectl pods', dropping the 'get' subcommand.
+        // Copilot agents following the template would run a failing command.
+        assert!(
+            COPILOT_INSTRUCTIONS.contains("rtk kubectl get pods"),
+            "COPILOT_INSTRUCTIONS must include 'rtk kubectl get pods' (not 'rtk kubectl pods')"
+        );
+        assert!(
+            !COPILOT_INSTRUCTIONS.contains("rtk kubectl pods\n")
+                && !COPILOT_INSTRUCTIONS.contains("rtk kubectl pods`"),
+            "COPILOT_INSTRUCTIONS must not contain 'rtk kubectl pods' without 'get'"
         );
     }
 }
