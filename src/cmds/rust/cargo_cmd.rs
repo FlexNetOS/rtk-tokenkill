@@ -814,13 +814,22 @@ fn cargo_build_failure_summary(
     json: &JsonDiagnostics,
 ) -> String {
     let mut out = String::new();
-    for d in &json.errors {
+    for d in json.errors.iter().take(CAP_ERRORS) {
         out.push_str(d);
         out.push('\n');
     }
-    for d in &json.warnings {
+    if json.errors.len() > CAP_ERRORS {
+        out.push_str(&format!("… +{} more errors\n", json.errors.len() - CAP_ERRORS));
+    }
+    for d in json.warnings.iter().take(CAP_WARNINGS) {
         out.push_str(d);
         out.push('\n');
+    }
+    if json.warnings.len() > CAP_WARNINGS {
+        out.push_str(&format!(
+            "… +{} more warnings\n",
+            json.warnings.len() - CAP_WARNINGS
+        ));
     }
     out.push_str(&format!(
         "cargo build: {} errors, {} warnings ({} crates)\n",
@@ -2246,6 +2255,35 @@ error: aborting due to 1 previous error
         assert!(result.contains("E0277"), "got: {}", result);
         assert!(result.contains("1 errors"), "got: {}", result);
         assert!(!result.contains("crates compiled"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_filter_cargo_build_json_errors_capped() {
+        let total = CAP_ERRORS + 5;
+        let mut output = String::new();
+        for i in 0..total {
+            output.push_str(&format!(
+                r#"{{"reason":"compiler-message","message":{{"code":{{"code":"E0308"}},"level":"error","message":"mismatched types","rendered":"error[E0308]: mismatched types ({})"}}}}"#,
+                i
+            ));
+            output.push('\n');
+        }
+        output.push_str(r#"{"reason":"build-finished","success":false}"#);
+        output.push('\n');
+
+        let result = filter_cargo_build(&output);
+        let rendered = result.matches("error[E0308]").count();
+        assert_eq!(rendered, CAP_ERRORS, "json errors must be capped: {}", result);
+        assert!(
+            result.contains(&format!("… +{} more errors", total - CAP_ERRORS)),
+            "expected overflow hint: {}",
+            result
+        );
+        assert!(
+            result.contains(&format!("{} errors", total)),
+            "summary must report the real total: {}",
+            result
+        );
     }
 
     #[test]
