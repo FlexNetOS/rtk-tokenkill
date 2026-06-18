@@ -386,11 +386,7 @@ pub fn run(
     let raw_output = result.stdout.clone();
 
     if result.stdout.trim().is_empty() {
-        // grep/rg convention: exit 1 = no match found (normal).
-        // exit >= 2 = real error (bad regex, tool crash, etc.) — surface it,
-        // never print "0 matches" for an error.
-        const GREP_ERROR_EXIT: i32 = 2;
-        if exit_code >= GREP_ERROR_EXIT {
+        if is_grep_error_exit(exit_code) {
             if !result.stderr.trim().is_empty() {
                 eprintln!("{}", result.stderr.trim());
             }
@@ -587,9 +583,28 @@ fn compact_path(path: &str) -> String {
     )
 }
 
+/// grep/rg convention: exit 1 = no match found (normal), exit >= 2 = real
+/// error (bad regex, tool crash, missing binary). An error must surface to the
+/// user, never be silently reported as a false "0 matches".
+fn is_grep_error_exit(exit_code: i32) -> bool {
+    exit_code >= 2
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_grep_error_exit() {
+        // exit 0 = matches, exit 1 = no match: both normal, not errors.
+        assert!(!is_grep_error_exit(0));
+        assert!(!is_grep_error_exit(1));
+        // exit >= 2 = real error (bad regex, tool crash, missing binary).
+        // Must surface, never become a false "0 matches".
+        assert!(is_grep_error_exit(2));
+        assert!(is_grep_error_exit(3));
+        assert!(is_grep_error_exit(127));
+    }
 
     #[test]
     fn test_clean_line() {
