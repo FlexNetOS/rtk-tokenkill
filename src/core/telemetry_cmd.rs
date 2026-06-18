@@ -18,6 +18,17 @@ pub fn run(command: &TelemetrySubcommand) -> Result<()> {
     }
 }
 
+/// Returns true when telemetry is explicitly disabled through the
+/// `RTK_TELEMETRY_DISABLED` env var (value `"1"`).
+///
+/// Single source of truth for the env opt-out so the consent prompt
+/// (`init::prompt_telemetry_consent`), the status command, and
+/// `telemetry::maybe_ping` never diverge — if the accepted values ever grow
+/// (e.g. `"true"`, `"y"`), they change here once.
+pub fn telemetry_disabled_by_env() -> bool {
+    std::env::var("RTK_TELEMETRY_DISABLED").unwrap_or_default() == "1"
+}
+
 fn run_status() -> Result<()> {
     let config = crate::core::config::Config::load().unwrap_or_default();
 
@@ -33,7 +44,7 @@ fn run_status() -> Result<()> {
         "no"
     };
 
-    let env_override = std::env::var("RTK_TELEMETRY_DISABLED").unwrap_or_default() == "1";
+    let env_override = telemetry_disabled_by_env();
 
     println!("Telemetry status:");
     println!("  consent:       {}", consent_str);
