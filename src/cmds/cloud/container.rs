@@ -58,24 +58,32 @@ where
 fn docker_ps(_verbose: u8) -> Result<i32> {
     let timer = tracking::TimedExecution::start();
 
-    let raw = exec_capture(resolved_command("docker").args(["ps"]))
-        .map(|r| r.stdout)
-        .unwrap_or_default();
+    let base = exec_capture(resolved_command("docker").args(["ps"]))
+        .context("Failed to run docker ps")?;
+    if !base.success() {
+        eprint!("{}", base.stderr);
+        print!("{}", base.stdout);
+        timer.track("docker ps", "rtk docker ps", &base.stdout, &base.stdout);
+        return Ok(base.exit_code);
+    }
+    let raw = base.stdout;
 
-    let result = exec_capture(resolved_command("docker").args([
+    let stdout = match exec_capture(resolved_command("docker").args([
         "ps",
         "--format",
         "{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}",
     ]))
-    .context("Failed to run docker ps")?;
+    .ok()
+    .filter(|r| r.success())
+    {
+        Some(r) => r.stdout,
+        None => {
+            print!("{}", raw);
+            timer.track("docker ps", "rtk docker ps", &raw, &raw);
+            return Ok(0);
+        }
+    };
 
-    if !result.success() {
-        eprint!("{}", result.stderr);
-        timer.track("docker ps", "rtk docker ps", &raw, &raw);
-        return Ok(result.exit_code);
-    }
-
-    let stdout = result.stdout;
     let mut rtk = String::new();
 
     if stdout.trim().is_empty() {
@@ -111,27 +119,36 @@ fn docker_ps(_verbose: u8) -> Result<i32> {
 fn docker_ps_all(_verbose: u8) -> Result<i32> {
     let timer = tracking::TimedExecution::start();
 
-    let raw = exec_capture(resolved_command("docker").args(["ps", "-a"]))
-        .map(|r| r.stdout)
-        .unwrap_or_default();
+    let base = exec_capture(resolved_command("docker").args(["ps", "-a"]))
+        .context("Failed to run docker ps -a")?;
+    if !base.success() {
+        eprint!("{}", base.stderr);
+        print!("{}", base.stdout);
+        timer.track("docker ps -a", "rtk docker ps -a", &base.stdout, &base.stdout);
+        return Ok(base.exit_code);
+    }
+    let raw = base.stdout;
 
-    let result = exec_capture(resolved_command("docker").args([
+    let stdout = match exec_capture(resolved_command("docker").args([
         "ps",
         "-a",
         "--format",
         "{{.State}}\t{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}",
     ]))
-    .context("Failed to run docker ps -a")?;
-
-    if !result.success() {
-        eprint!("{}", result.stderr);
-        timer.track("docker ps -a", "rtk docker ps -a", &raw, &raw);
-        return Ok(result.exit_code);
-    }
+    .ok()
+    .filter(|r| r.success())
+    {
+        Some(r) => r.stdout,
+        None => {
+            print!("{}", raw);
+            timer.track("docker ps -a", "rtk docker ps -a", &raw, &raw);
+            return Ok(0);
+        }
+    };
 
     let mut running_lines: Vec<String> = Vec::new();
     let mut stopped_lines: Vec<String> = Vec::new();
-    for line in result.stdout.lines().filter(|l| !l.trim().is_empty()) {
+    for line in stdout.lines().filter(|l| !l.trim().is_empty()) {
         let parts: Vec<&str> = line.split('\t').collect();
         let state = parts.first().copied().unwrap_or("");
         let is_running = matches!(state, "running" | "restarting");
@@ -218,24 +235,32 @@ fn format_container_line_from_parts(parts: &[&str], with_ports: bool) -> Option<
 fn docker_images(_verbose: u8) -> Result<i32> {
     let timer = tracking::TimedExecution::start();
 
-    let raw = exec_capture(resolved_command("docker").args(["images"]))
-        .map(|r| r.stdout)
-        .unwrap_or_default();
+    let base = exec_capture(resolved_command("docker").args(["images"]))
+        .context("Failed to run docker images")?;
+    if !base.success() {
+        eprint!("{}", base.stderr);
+        print!("{}", base.stdout);
+        timer.track("docker images", "rtk docker images", &base.stdout, &base.stdout);
+        return Ok(base.exit_code);
+    }
+    let raw = base.stdout;
 
-    let result = exec_capture(resolved_command("docker").args([
+    let stdout = match exec_capture(resolved_command("docker").args([
         "images",
         "--format",
         "{{.Repository}}:{{.Tag}}\t{{.Size}}",
     ]))
-    .context("Failed to run docker images")?;
+    .ok()
+    .filter(|r| r.success())
+    {
+        Some(r) => r.stdout,
+        None => {
+            print!("{}", raw);
+            timer.track("docker images", "rtk docker images", &raw, &raw);
+            return Ok(0);
+        }
+    };
 
-    if !result.success() {
-        eprint!("{}", result.stderr);
-        timer.track("docker images", "rtk docker images", &raw, &raw);
-        return Ok(result.exit_code);
-    }
-
-    let stdout = result.stdout;
     let lines: Vec<&str> = stdout.lines().collect();
     let mut rtk = String::new();
 
