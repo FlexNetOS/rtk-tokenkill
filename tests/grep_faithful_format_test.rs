@@ -112,6 +112,23 @@ fn issue_1436_colons_and_literal_parens() {
     assert_eq_grep_n(&["init", &f]); // ClassRegistry::init must stay one intact line
 }
 
+// #1436 (comments): a leading `^` anchor must stay scoped to the given file
+// (tenequm), and a line ending in `:` (Python `if x:`) must keep full content
+// (BTCAlchemist).
+#[test]
+fn issue_1436_anchor_scope_and_trailing_colon() {
+    let d = tempfile::tempdir().unwrap();
+    let f = write(d.path(), "code.rs", "pub fn a\nprivate b\npub fn c\n");
+    let py = write(
+        d.path(),
+        "t.py",
+        "x = 1\nif crypto >= MAX_CRYPTO:\nclass Foo:\n",
+    );
+    assert_eq_grep_n(&["^pub", &f]); // anchored pattern must not escape the path
+    assert_eq_grep_n(&["MAX_CRYPTO", &py]); // trailing-colon line kept intact
+    assert_eq_grep_n(&["class", &py]);
+}
+
 #[test]
 fn colon_in_filename_matches_grep_n() {
     let d = tempfile::tempdir().unwrap();

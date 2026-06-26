@@ -327,3 +327,22 @@ fn rg_files_lists_the_given_dir() {
         "--files must list the given dir, not the cwd:\n{stdout}"
     );
 }
+
+// #1436 (jhagberg): a pattern rg rejects must surface rg's error (exit 2), never
+// be swallowed into a silent "0 matches" (exit 1) that reads as a clean no-match.
+#[test]
+fn rg_surfaces_regex_error_not_silent_zero() {
+    if !rg_available() {
+        return;
+    }
+    let (_dir, path) = write_temp("GET /objects/{path}\nfilePath: x\n");
+    let out = rtk()
+        .args(["rg", "objects|{path}", path.to_str().unwrap()])
+        .output()
+        .expect("rtk rg");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "an rg regex parse error must surface as exit 2, not a silent 0/1"
+    );
+}
