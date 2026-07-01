@@ -128,16 +128,10 @@ You can add your own filters in two places (both use the format above):
 - **Project-local** — `.rtk/filters.toml` (committed with a repo, applies in that project)
 - **User-global** — `~/.config/rtk/filters.toml` (applies in every project)
 
-Because a filter can rewrite or hide the command output an agent sees, **custom filter files are not applied until you trust them**. If a filter file is present but untrusted, RTK skips it and prints:
-
-```
-[rtk] WARNING: untrusted filters .rtk/filters.toml — NOT applied. Run `rtk trust` to review and enable.
-```
-
-Enable it with:
+Because a filter can rewrite or hide the command output an agent sees, **custom filter files are not applied until you trust them**. An untrusted (or edited) filter file is skipped **silently** on the command path — RTK never prints a warning around a rewritten command. You discover and enable untrusted filters through commands you run deliberately:
 
 ```bash
-rtk trust       # prints each filter's rules + a risk summary, then enables them
+rtk trust       # lists each detected filter (labelled project/global) + a risk summary, then asks to confirm ([y/N], or --yes)
 rtk untrust     # revokes trust
 ```
 
