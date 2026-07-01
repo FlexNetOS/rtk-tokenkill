@@ -794,7 +794,7 @@ fn extract_json_diagnostics(raw: &str) -> JsonDiagnostics {
             continue;
         }
         if let Some(rendered) = msg["rendered"].as_str() {
-            bucket.push(rendered.trim_end().to_string());
+            bucket.push(crate::core::utils::strip_ansi(rendered).trim_end().to_string());
         } else if !text.is_empty() {
             bucket.push(text.to_string());
         }
@@ -2263,6 +2263,29 @@ error: aborting due to 1 previous error
         assert!(result.contains("1 warnings"), "got: {}", result);
         assert!(!result.contains("crates compiled"), "got: {}", result);
     }
+
+    #[test]
+    fn test_extract_json_diagnostics_strips_ansi() {
+        let output = concat!(
+            r#"{"reason":"compiler-message","message":{"level":"error","message":"mismatched types","rendered":"\u001b[1m\u001b[31merror[E0308]\u001b[0m: mismatched types"}}"#,
+            "\n",
+            r#"{"reason":"build-finished","success":false}"#,
+            "\n",
+        );
+        let json = extract_json_diagnostics(output);
+        assert_eq!(json.errors.len(), 1);
+        assert!(
+            !json.errors[0].contains('\u{1b}'),
+            "ansi escapes must be stripped: {:?}",
+            json.errors[0]
+        );
+        assert!(
+            json.errors[0].contains("error[E0308]"),
+            "got: {:?}",
+            json.errors[0]
+        );
+    }
+
 
     #[test]
     fn test_extract_json_diagnostics_skips_generated_summary() {
