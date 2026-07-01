@@ -811,7 +811,7 @@ fn extract_json_diagnostics(raw: &str) -> JsonDiagnostics {
         let text = msg["message"].as_str().unwrap_or("");
         if text.starts_with("aborting due to")
             || text.starts_with("could not compile")
-            || (text.contains("warning") && text.contains("generated"))
+            || (text.contains("warning") && text.ends_with("generated"))
         {
             continue;
         }
