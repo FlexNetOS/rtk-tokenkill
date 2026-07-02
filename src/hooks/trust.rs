@@ -255,8 +255,10 @@ pub fn run_trust(list: bool, yes: bool) -> Result<()> {
         return Ok(());
     }
 
+    let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
     let mut found_any = false;
-    let mut trusted_any = false;
+    let mut enabled_any = false;
+    let mut had_error = false;
     for (scope, filter_path) in gated_filter_paths_labeled() {
         if !filter_path.exists() {
             continue;
@@ -264,11 +266,31 @@ pub fn run_trust(list: bool, yes: bool) -> Result<()> {
         let bytes = std::fs::read(&filter_path)
             .with_context(|| format!("Failed to read {}", filter_path.display()))?;
         let content = String::from_utf8_lossy(&bytes);
+
+        if let Some(err) = crate::core::toml_filter::filter_parse_error(&content) {
+            had_error = true;
+            eprintln!(
+                "  {} — invalid TOML, not loaded: {}",
+                filter_path.display(),
+                err
+            );
+            continue;
+        }
         let filters = crate::core::toml_filter::active_filter_summaries(&content);
         if filters.is_empty() {
             continue;
         }
         found_any = true;
+
+        if matches!(
+            check_trust(&filter_path).unwrap_or(TrustStatus::Untrusted),
+            TrustStatus::Trusted | TrustStatus::EnvOverride
+        ) {
+            eprintln!("  {} already trusted.", filter_path.display());
+            enabled_any = true;
+            continue;
+        }
+
         print_filter_notice(&filter_path, scope, &filters);
         print_risk_summary(&content);
 
@@ -278,16 +300,23 @@ pub fn run_trust(list: bool, yes: bool) -> Result<()> {
         }
         let hash = crate::hooks::integrity::compute_hash_bytes(&bytes);
         trust_filter_with_hash(&filter_path, &hash)?;
-        trusted_any = true;
+        enabled_any = true;
         eprintln!("  Enabled — revoke with `rtk untrust`.");
     }
 
     if !found_any {
+        if had_error {
+            anyhow::bail!("Filter file present but not valid TOML — see the error above.");
+        }
         anyhow::bail!("No custom filters found (.rtk/filters.toml or ~/.config/rtk/filters.toml)");
     }
-    if trusted_any {
-        println!("Filters will now be applied.");
+    if !enabled_any {
+        if !interactive {
+            anyhow::bail!("Custom filters found but none enabled — re-run `rtk trust --yes`.");
+        }
+        return Ok(());
     }
+    println!("Filters will now be applied.");
     Ok(())
 }
 
