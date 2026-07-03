@@ -39,15 +39,25 @@ struct CargoBuildHandler {
     warnings: usize,
     error_count: usize,
     finished_line: Option<String>,
+    label: &'static str,
 }
 
 impl CargoBuildHandler {
     fn new() -> Self {
+        Self::with_label("build")
+    }
+
+    fn for_check() -> Self {
+        Self::with_label("check")
+    }
+
+    fn with_label(label: &'static str) -> Self {
         Self {
             compiled: 0,
             warnings: 0,
             error_count: 0,
             finished_line: None,
+            label,
         }
     }
 }
@@ -101,6 +111,7 @@ impl BlockHandler for CargoBuildHandler {
             return Some(cargo_build_success_line(
                 self.compiled,
                 self.finished_line.as_deref(),
+                self.label,
             ));
         }
         Some(cargo_build_failure_summary(
@@ -108,6 +119,7 @@ impl BlockHandler for CargoBuildHandler {
             errors,
             warnings,
             &json,
+            self.label,
         ))
     }
 }
@@ -345,13 +357,15 @@ fn run_clippy(args: &[String], verbose: u8) -> Result<i32> {
 
 fn run_check(args: &[String], verbose: u8) -> Result<i32> {
     if has_json_message_format(args) {
-        return run_cargo_filtered("check", args, verbose, filter_cargo_build);
+        return run_cargo_filtered("check", args, verbose, |o| {
+            filter_cargo_build_labeled(o, "check")
+        });
     }
     run_cargo_streamed(
         "check",
         args,
         verbose,
-        Box::new(BlockStreamFilter::new(CargoBuildHandler::new())),
+        Box::new(BlockStreamFilter::new(CargoBuildHandler::for_check())),
     )
 }
 
@@ -831,10 +845,10 @@ fn merge_diag_counts(error_count: usize, warnings: usize, json: &JsonDiagnostics
     )
 }
 
-fn cargo_build_success_line(compiled: usize, finished: Option<&str>) -> String {
+fn cargo_build_success_line(compiled: usize, finished: Option<&str>, label: &str) -> String {
     match finished {
-        Some(f) => format!("cargo build ({} crates compiled)\n{}\n", compiled, f),
-        None => format!("cargo build ({} crates compiled)\n", compiled),
+        Some(f) => format!("cargo {} ({} crates compiled)\n{}\n", label, compiled, f),
+        None => format!("cargo {} ({} crates compiled)\n", label, compiled),
     }
 }
 
@@ -843,6 +857,7 @@ fn cargo_build_failure_summary(
     errors: usize,
     warnings: usize,
     json: &JsonDiagnostics,
+    label: &str,
 ) -> String {
     let mut out = String::new();
     for d in json.errors.iter().take(CAP_ERRORS) {
@@ -875,13 +890,17 @@ fn cargo_build_failure_summary(
         }
     }
     out.push_str(&format!(
-        "cargo build: {} errors, {} warnings ({} crates)\n",
-        errors, warnings, compiled
+        "cargo {}: {} errors, {} warnings ({} crates)\n",
+        label, errors, warnings, compiled
     ));
     out
 }
 
 fn filter_cargo_build(output: &str) -> String {
+    filter_cargo_build_labeled(output, "build")
+}
+
+fn filter_cargo_build_labeled(output: &str, label: &str) -> String {
     let mut handler = CargoBuildHandler::new();
     let mut blocks: Vec<Vec<String>> = Vec::new();
     let mut current_block: Vec<String> = Vec::new();
@@ -914,10 +933,10 @@ fn filter_cargo_build(output: &str) -> String {
     let (errors, warnings) = merge_diag_counts(handler.error_count, handler.warnings, &json);
 
     if errors == 0 && warnings == 0 {
-        return cargo_build_success_line(handler.compiled, handler.finished_line.as_deref());
+        return cargo_build_success_line(handler.compiled, handler.finished_line.as_deref(), label);
     }
 
-    let mut result = cargo_build_failure_summary(handler.compiled, errors, warnings, &json);
+    let mut result = cargo_build_failure_summary(handler.compiled, errors, warnings, &json, label);
     const MAX_CHECK_BLOCKS: usize = CAP_ERRORS;
     for (i, blk) in blocks.iter().enumerate().take(MAX_CHECK_BLOCKS) {
         result.push_str(&blk.join("\n"));
@@ -2301,6 +2320,44 @@ error: aborting due to 1 previous error
         assert!(result.contains("unused variable"), "got: {}", result);
         assert!(result.contains("1 warnings"), "got: {}", result);
         assert!(!result.contains("crates compiled"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_cargo_check_stream_success_label() {
+        let input = "   Checking demo v0.1.0 (/tmp/demo)\n    Finished dev [unoptimized + debuginfo] target(s) in 0.42s\n";
+        let mut f = BlockStreamFilter::new(CargoBuildHandler::for_check());
+        let result = run_block_filter(&mut f, input, 0);
+        assert!(result.contains("cargo check"), "got: {}", result);
+        assert!(!result.contains("cargo build"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_cargo_check_stream_json_failure_label() {
+        let input = concat!(
+            "   Checking v_cargo v0.1.0 (/tmp/v_cargo)\n",
+            r#"{"reason":"compiler-message","package_id":"v_cargo 0.1.0","message":{"code":{"code":"E0308"},"level":"error","message":"mismatched types","rendered":"error[E0308]: mismatched types\n --> src/main.rs:2:18"}}"#,
+            "\n",
+            r#"{"reason":"build-finished","success":false}"#,
+            "\n",
+        );
+        let mut f = BlockStreamFilter::new(CargoBuildHandler::for_check());
+        let result = run_block_filter(&mut f, input, 101);
+        assert!(result.contains("cargo check:"), "got: {}", result);
+        assert!(!result.contains("cargo build:"), "got: {}", result);
+        assert!(result.contains("1 errors"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_filter_cargo_build_labeled_check() {
+        let input = concat!(
+            r#"{"reason":"compiler-message","message":{"level":"error","message":"mismatched types","rendered":"error[E0308]: mismatched types\n --> src/main.rs:2:18"}}"#,
+            "\n",
+            r#"{"reason":"build-finished","success":false}"#,
+            "\n",
+        );
+        let result = filter_cargo_build_labeled(input, "check");
+        assert!(result.contains("cargo check:"), "got: {}", result);
+        assert!(!result.contains("cargo build:"), "got: {}", result);
     }
 
     #[test]
