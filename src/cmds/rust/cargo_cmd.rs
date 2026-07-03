@@ -828,7 +828,7 @@ fn extract_json_diagnostics(raw: &str) -> JsonDiagnostics {
         let text = msg["message"].as_str().unwrap_or("");
         if text.starts_with("aborting due to")
             || text.starts_with("could not compile")
-            || (text.contains("warning") && text.ends_with("generated"))
+            || (text.contains("warning") && text.contains("generated"))
         {
             continue;
         }
@@ -2412,7 +2412,7 @@ error: aborting due to 1 previous error
         let output = concat!(
             r#"{"reason":"compiler-message","message":{"level":"warning","message":"unused variable: `x`","rendered":"warning: unused variable: `x`"}}"#,
             "\n",
-            r#"{"reason":"compiler-message","message":{"level":"warning","message":"1 warning generated","rendered":"warning: 1 warning generated"}}"#,
+            r#"{"reason":"compiler-message","message":{"level":"warning","message":"`demo` (bin \"demo\") generated 1 warning","rendered":"warning: `demo` (bin \"demo\") generated 1 warning"}}"#,
             "\n",
             r#"{"reason":"build-finished","success":true}"#,
             "\n",
