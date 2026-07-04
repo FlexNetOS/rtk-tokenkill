@@ -576,23 +576,25 @@ fn process_droid_payload(v: &Value) -> Option<Value> {
         .and_then(|c| c.as_str())
         .filter(|c| !c.is_empty())?;
 
-    let verdict = permissions::check_command(cmd);
-    droid_response_for_verdict(v, cmd, verdict)
+    droid_response_from_decision(v, cmd, decide_hook_action(cmd, permissions::Host::Claude))
 }
 
-/// Build the Droid hook response for a known verdict.
+/// Build the Droid hook response for a decision from the shared flow.
 ///
 /// On `Deny` we step aside (emit no output) so Droid's native deny handling
-/// fires, matching Claude/Cursor/Copilot and the `PermissionVerdict::Deny`
-/// contract ("pass through to native deny handling"). RTK never emits its own
-/// block here.
-fn droid_response_for_verdict(v: &Value, cmd: &str, verdict: PermissionVerdict) -> Option<Value> {
-    if verdict == PermissionVerdict::Deny {
-        audit_log("deny", cmd, "");
-        return None;
-    }
-
-    let rewritten = get_rewritten(cmd)?;
+/// fires, matching Claude/Cursor/Copilot. `Defer` (command substitution, file
+/// redirects, or no rewrite available) also stays silent so Droid runs the
+/// command unchanged. RTK never emits its own block here.
+fn droid_response_from_decision(v: &Value, cmd: &str, decision: HookDecision) -> Option<Value> {
+    let (rewritten, allow) = match decision {
+        HookDecision::Deny => {
+            audit_log("deny", cmd, "");
+            return None;
+        }
+        HookDecision::Defer => return None,
+        HookDecision::AllowRewrite(r) => (r, true),
+        HookDecision::AskRewrite(r) => (r, false),
+    };
 
     audit_log("rewrite", cmd, &rewritten);
 
@@ -622,11 +624,8 @@ fn droid_response_for_verdict(v: &Value, cmd: &str, verdict: PermissionVerdict) 
         "updatedInput": updated_input
     });
 
-    if verdict == PermissionVerdict::Allow {
-        hook_output
-            .as_object_mut()
-            .unwrap()
-            .insert("permissionDecision".into(), json!("allow"));
+    if allow {
+        hook_output["permissionDecision"] = json!("allow");
     }
 
     Some(json!({ "hookSpecificOutput": hook_output }))
@@ -1584,26 +1583,57 @@ mod tests {
     fn test_droid_deny_steps_aside() {
         // A denied command must produce NO output so Droid's native deny
         // handling fires — matching Claude/Cursor/Copilot. RTK must not emit
-        // its own `permissionDecision: deny` block (PermissionVerdict::Deny
-        // contract). Verdict is injected because check_command loads ambient
-        // rules that aren't present in the test environment.
+        // its own `permissionDecision: deny` block. Decision is injected
+        // because decide_hook_action loads ambient rules that aren't present
+        // in the test environment.
         let v: Value = serde_json::from_str(&droid_input("Execute", "git push --force")).unwrap();
         assert!(
-            droid_response_for_verdict(&v, "git push --force", PermissionVerdict::Deny).is_none(),
+            droid_response_from_decision(&v, "git push --force", HookDecision::Deny).is_none(),
             "deny must step aside (no output), not emit an RTK block"
         );
     }
 
     #[test]
-    fn test_droid_allow_verdict_auto_allows() {
+    fn test_droid_allow_decision_auto_allows() {
         // An explicit allow rule auto-allows the rewritten command.
         let v: Value = serde_json::from_str(&droid_input("Execute", "git status")).unwrap();
-        let out = droid_response_for_verdict(&v, "git status", PermissionVerdict::Allow)
-            .expect("rewrite expected");
+        let out = droid_response_from_decision(
+            &v,
+            "git status",
+            HookDecision::AllowRewrite("rtk git status".to_string()),
+        )
+        .expect("rewrite expected");
         assert_eq!(
             out.pointer("/hookSpecificOutput/permissionDecision")
                 .and_then(|c| c.as_str()),
             Some("allow")
+        );
+        assert_eq!(
+            out.pointer("/hookSpecificOutput/updatedInput/command")
+                .and_then(|c| c.as_str()),
+            Some("rtk git status")
+        );
+    }
+
+    #[test]
+    fn test_droid_substitution_defers() {
+        // Commands with substitution can't be attested — the shared decision
+        // flow defers so Droid runs the original command unchanged.
+        for cmd in ["git status `rm -rf /tmp/x`", "git status $(rm -rf /tmp/x)"] {
+            let input = droid_input("Execute", cmd);
+            assert!(
+                run_droid_inner(&input).is_none(),
+                "substitution must defer (no output) for {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_droid_file_redirect_defers() {
+        let input = droid_input("Execute", "git log > /tmp/out.txt");
+        assert!(
+            run_droid_inner(&input).is_none(),
+            "file redirects must defer (no output)"
         );
     }
 
