@@ -565,8 +565,10 @@ fn run_cursor_inner_with_rules(
 
 fn process_droid_payload(v: &Value) -> Option<Value> {
     let tool_name = v.get("tool_name").and_then(|t| t.as_str()).unwrap_or("");
-    // Accept both the documented `Execute` and the legacy `Bash` matchers so
-    // older Droid releases keep working.
+    // `Execute` is Droid's shell tool. The installed matcher already gates
+    // invocations to Execute; also tolerate a missing tool_name and accept
+    // `Bash` defensively for Claude-shaped payloads (Droid itself has no Bash
+    // tool — verified against Droid v0.164.0).
     if !matches!(tool_name, "Execute" | "Bash" | "") {
         return None;
     }
@@ -607,17 +609,18 @@ fn droid_response_from_decision(v: &Value, cmd: &str, decision: HookDecision) ->
     };
 
     // Wire format mirrors Claude's `hookSpecificOutput`; the allow policy mirrors
-    // `process_claude_payload`, NOT Cursor. Verified empirically against Droid
-    // 0.140.0: Droid applies a hook's `updatedInput` regardless of the permission
-    // decision — beyond the `case "allow"` branch it has an "updated input result"
-    // path that applies any hook's `updatedInput` even when no decision is set. So
-    // forcing "allow" is unnecessary for the rewrite to land, and would be harmful:
-    // Droid resolves the decision as `find(first result with a permissionDecision)`
-    // (no deny-over-allow priority), so an unconditional "allow" can suppress
-    // another PreToolUse hook's deny/ask and bypasses Droid's native permission
-    // prompt. We therefore only assert "allow" on an explicit allow rule; otherwise
-    // we omit the decision so the rewrite still applies while the user's other
-    // hooks and Droid's native prompt stay in control.
+    // `process_claude_payload`, NOT Cursor. Verified against Droid 0.140.0 and
+    // re-verified in the shipped v0.164.0 code: Droid applies a hook's
+    // `updatedInput` regardless of the permission decision — beyond the
+    // `case "allow"` branch it has an "updated input result" path that applies any
+    // hook's `updatedInput` even when no decision is set. So forcing "allow" is
+    // unnecessary for the rewrite to land, and would be harmful: Droid resolves
+    // the decision as `find(first result with a permissionDecision)` (no
+    // deny-over-allow priority), so an unconditional "allow" can suppress another
+    // PreToolUse hook's deny/ask and bypasses Droid's native permission prompt.
+    // We therefore only assert "allow" on an explicit allow rule; otherwise we
+    // omit the decision so the rewrite still applies while the user's other hooks
+    // and Droid's native prompt stay in control.
     let mut hook_output = json!({
         "hookEventName": PRE_TOOL_USE_KEY,
         "permissionDecisionReason": "RTK auto-rewrite",
@@ -1571,11 +1574,13 @@ mod tests {
     }
 
     #[test]
-    fn test_droid_legacy_bash_matcher_still_works() {
+    fn test_droid_bash_tool_name_accepted_defensively() {
+        // Droid has no Bash tool, but Claude-shaped payloads are accepted
+        // defensively; the installed matcher gates invocations to Execute.
         let input = droid_input("Bash", "git status");
         assert!(
             run_droid_inner(&input).is_some(),
-            "legacy Bash matcher should still rewrite"
+            "Bash tool name should still rewrite"
         );
     }
 
