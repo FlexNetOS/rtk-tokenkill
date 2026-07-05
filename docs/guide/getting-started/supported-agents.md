@@ -1,6 +1,6 @@
 ---
 title: Supported Agents
-description: How to integrate RTK with Claude Code, Cursor, Copilot, Cline, Windsurf, Codex, OpenCode, Hermes, Kilo Code, and Antigravity
+description: How to integrate RTK with Claude Code, Cursor, Copilot, Cline, Windsurf, Codex, OpenCode, Hermes, Kilo Code, Antigravity, and Factory Droid
 sidebar:
   order: 3
 ---
@@ -37,6 +37,7 @@ Agent runs "cargo test"
 | OpenClaw | TypeScript plugin (`before_tool_call`) | Yes |
 | Pi | TypeScript extension (`tool_call` event) | Yes |
 | Hermes | Python plugin (`terminal` command mutation) | Yes |
+| Factory Droid | Shell hook (`PreToolUse`, matcher `Execute`) | Yes |
 | Cline / Roo Code | Rules file (prompt-level) | N/A |
 | Windsurf | Rules file (prompt-level) | N/A |
 | Codex CLI | AGENTS.md instructions | N/A |
@@ -136,6 +137,26 @@ rtk init --agent hermes
 Creates `~/.hermes/plugins/rtk-rewrite/` and enables it through `plugins.enabled` in the Hermes config. Hermes loads Python plugins, so the plugin entrypoint is Python, but it is only a thin adapter. It mutates the Hermes `terminal` tool `command` before execution and delegates all rewrite decisions to Rust through `rtk rewrite`. The repository source and tests for that adapter live in `hooks/hermes/`; only installed runtime files use the `~/.hermes/plugins/rtk-rewrite/` path.
 
 The plugin fails open. If `rtk` is missing at load time, the hook is not registered. If `rtk rewrite` errors, the tool is not `terminal`, the payload has no string `command`, or the plugin raises an exception, Hermes runs the original command unchanged. The same `rtk rewrite` limitations apply: already-prefixed `rtk` commands, compound shell commands, heredocs, and commands without filters are not rewritten.
+
+### Factory Droid
+
+```bash
+rtk init -g --agent droid    # user-scoped (~/.factory/hooks.json)
+rtk init --agent droid       # project-scoped (.factory/hooks.json, commit to share)
+```
+
+Installs a `PreToolUse` hook (matcher `Execute`) into Droid's canonical `hooks.json` — falling back to the `hooks` key of `settings.json` only when that file already carries live `PreToolUse` hooks. Respects `$FACTORY_HOME_OVERRIDE`.
+
+RTK enforces Droid's own permission lists from `~/.factory/settings.json`, never another agent's settings: commands matching `commandAllowlist` (or Droid's built-in read-only defaults) are rewritten and auto-allowed; commands matching `commandDenylist` or `commandBlocklist` are left untouched so Droid's native confirmation or block fires on the original command.
+
+Uninstall:
+
+```bash
+rtk init --uninstall -g --agent droid
+rtk init --uninstall --agent droid
+```
+
+Removes only RTK's hook entry; other hooks and settings are untouched.
 
 ### Cline / Roo Code
 
