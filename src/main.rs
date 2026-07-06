@@ -902,6 +902,12 @@ enum GitCommands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Checkout branch or restore paths → "ok"
+    Checkout {
+        /// Git checkout arguments (supports -b, branch names, refs, -- paths)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Push → "ok \<branch\>"
     Push {
         /// Git push arguments (supports -u, remote, branch, etc.)
@@ -1680,6 +1686,13 @@ fn run_cli() -> Result<i32> {
                 }
                 GitCommands::Commit { args } => git::run(
                     git::GitCommand::Commit,
+                    &args,
+                    None,
+                    cli.verbose,
+                    &global_args,
+                )?,
+                GitCommands::Checkout { args } => git::run(
+                    git::GitCommand::Checkout,
                     &args,
                     None,
                     cli.verbose,
