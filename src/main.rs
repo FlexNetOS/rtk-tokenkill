@@ -368,6 +368,14 @@ enum Commands {
         #[arg(long = "no-patch", group = "patch")]
         no_patch: bool,
 
+        /// Trust and enable detected custom filters without prompting
+        #[arg(long = "trust-filters", group = "trust")]
+        trust_filters: bool,
+
+        /// Leave detected custom filters disabled without prompting
+        #[arg(long = "no-trust-filters", group = "trust")]
+        no_trust_filters: bool,
+
         /// Remove RTK artifacts for the selected assistant mode
         #[arg(long)]
         uninstall: bool,
@@ -644,9 +652,12 @@ enum Commands {
 
     /// Trust project-local TOML filters in current directory
     Trust {
-        /// List all trusted projects
+        /// List all trusted filter files
         #[arg(long)]
         list: bool,
+        /// Trust without prompting (for non-interactive use)
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 
     /// Revoke trust for project-local TOML filters
@@ -1225,32 +1236,6 @@ enum GoCommands {
     Other(Vec<OsString>),
 }
 
-/// RTK-only subcommands that should never fall back to raw execution.
-/// If Clap fails to parse these, show the Clap error directly.
-/// When adding a new RTK-only subcommand to `Commands`, add its clap name here.
-const RTK_META_COMMANDS: &[&str] = &[
-    "gain",
-    "discover",
-    "learn",
-    "init",
-    "config",
-    "proxy",
-    "run",
-    "hook",
-    "hook-audit",
-    "pipe",
-    "cc-economics",
-    "verify",
-    "trust",
-    "untrust",
-    "session",
-    "rewrite",
-    "telemetry",
-    "smart",
-    "deps",
-    "json",
-];
-
 fn run_fallback(parse_error: clap::Error) -> Result<i32> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -1261,7 +1246,7 @@ fn run_fallback(parse_error: clap::Error) -> Result<i32> {
 
     // RTK meta-commands should never fall back to raw execution.
     // e.g. `rtk gain --badtypo` should show Clap's error, not try to run `gain` from $PATH.
-    if RTK_META_COMMANDS.contains(&args[0].as_str()) {
+    if core::constants::RTK_META_COMMANDS.contains(&args[0].as_str()) {
         parse_error.exit();
     }
 
@@ -1283,7 +1268,7 @@ fn run_fallback(parse_error: clap::Error) -> Result<i32> {
             .collect::<Vec<_>>()
             .join(" ")
     };
-    let toml_match = if std::env::var("RTK_NO_TOML").ok().as_deref() == Some("1") {
+    let toml_match = if core::toml_filter::toml_disabled() {
         None
     } else {
         core::toml_filter::find_matching_filter(&lookup_cmd)
@@ -1321,16 +1306,34 @@ fn run_fallback(parse_error: clap::Error) -> Result<i32> {
                 } else {
                     stdout_raw.to_string()
                 };
-                // Tee raw output BEFORE filtering on failure — lets LLM re-read if needed
-                let tee_hint = if !output.status.success() {
+                let success = output.status.success();
+                let (filtered, loss) =
+                    core::toml_filter::apply_filter_with_info(filter, &combined_raw);
+                let lossy = !matches!(loss, core::toml_filter::Lossiness::None);
+
+                let hint = if !success {
                     core::tee::tee_and_hint(&combined_raw, &raw_command, exit_code)
                 } else {
-                    None
+                    match &loss {
+                        core::toml_filter::Lossiness::None => None,
+                        core::toml_filter::Lossiness::Tail {
+                            tee_payload,
+                            tail_offset,
+                        } => {
+                            core::tee::force_tee_tail_hint(tee_payload, &raw_command, *tail_offset)
+                        }
+                        core::toml_filter::Lossiness::Whole => {
+                            core::tee::force_tee_hint(&combined_raw, &raw_command)
+                        }
+                    }
                 };
 
-                let filtered = core::toml_filter::apply_filter(filter, &combined_raw);
-                let shown =
-                    core::runner::emit_guarded(&filtered, tee_hint.as_deref(), &combined_raw);
+                // Never emit an unrecoverable truncation marker: fall back to full raw.
+                let shown = if lossy && hint.is_none() {
+                    core::runner::emit_guarded(&combined_raw, None, &combined_raw)
+                } else {
+                    core::runner::emit_guarded(&filtered, hint.as_deref(), &combined_raw)
+                };
 
                 timer.track(
                     &raw_command,
@@ -1945,6 +1948,8 @@ fn run_cli() -> Result<i32> {
             hook_only,
             auto_patch,
             no_patch,
+            trust_filters,
+            no_trust_filters,
             uninstall,
             codex,
             copilot,
@@ -2030,6 +2035,14 @@ fn run_cli() -> Result<i32> {
                     patch_mode,
                     ctx,
                 )?;
+                let filter_trust = if trust_filters {
+                    hooks::init::FilterTrust::Trust
+                } else if no_trust_filters || auto_patch {
+                    hooks::init::FilterTrust::Skip
+                } else {
+                    hooks::init::FilterTrust::Ask
+                };
+                hooks::init::finalize_filter_trust(global, dry_run, filter_trust)?;
             }
             0
         }
@@ -2588,8 +2601,8 @@ fn run_cli() -> Result<i32> {
             core::utils::exit_code_from_status(&status, &cmd_name)
         }
 
-        Commands::Trust { list } => {
-            hooks::trust::run_trust(list)?;
+        Commands::Trust { list, yes } => {
+            hooks::trust::run_trust(list, yes)?;
             0
         }
 
@@ -2989,7 +3002,7 @@ mod tests {
     fn test_meta_commands_reject_bad_flags() {
         // RTK meta-commands should produce parse errors (not fall through to raw execution).
         // Skip "proxy" because it uses trailing_var_arg (accepts any args by design).
-        for cmd in RTK_META_COMMANDS {
+        for cmd in core::constants::RTK_META_COMMANDS {
             if matches!(*cmd, "proxy" | "run" | "rewrite" | "session") {
                 continue; // these use trailing_var_arg (accept any args by design)
             }
@@ -3073,7 +3086,8 @@ mod tests {
             .get_subcommands()
             .map(|c| c.get_name().to_string())
             .filter(|name| {
-                !RTK_META_COMMANDS.contains(&name.as_str()) && !PASSTHROUGH.contains(&name.as_str())
+                !core::constants::RTK_META_COMMANDS.contains(&name.as_str())
+                    && !PASSTHROUGH.contains(&name.as_str())
             })
             .collect();
 
