@@ -57,3 +57,9 @@ claudedocs
 .handoff/**/*.rvf.lock
 .handoff/**/*.sqlite.bak
 .handoff/**/*.redb.tmp
+
+# GitKB
+.kb/.cache/
+.kb/store/
+.kb/workspace/
+.kb/workspaces/
