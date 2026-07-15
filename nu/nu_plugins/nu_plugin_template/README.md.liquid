@@ -1,0 +1,34 @@
+# {{ project-name }}
+
+This is a [Nushell](https://nushell.sh/) plugin called "{{ plugin_name }}".
+
+## Installing
+
+```nushell
+> cargo install --path .
+```
+
+## Usage
+
+FIXME: This reflects the demo functionality generated with the template. Update this documentation
+once you have implemented the actual plugin functionality.
+
+```nushell
+> plugin add ~/.cargo/bin/{{ project-name }}
+> plugin use {{ plugin_name }}
+{% if command_is_simple -%}
+> {{ command_name }} Ellie
+Hello, Ellie. How are you today?
+> {{ command_name }} --shout Ellie
+HELLO, ELLIE. HOW ARE YOU TODAY?
+{%- else -%}
+> [ Ellie ] | {{ command_name }}
+╭───┬──────────────────────────────────╮
+│ 0 │ Hello, Ellie. How are you today? │
+╰───┴──────────────────────────────────╯
+> [ Ellie ] | {{ command_name }} --shout
+╭───┬──────────────────────────────────╮
+│ 0 │ HELLO, ELLIE. HOW ARE YOU TODAY? │
+╰───┴──────────────────────────────────╯
+{%- endif %}
+```

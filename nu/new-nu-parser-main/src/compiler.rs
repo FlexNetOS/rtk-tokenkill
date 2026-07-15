@@ -1,0 +1,396 @@
+use crate::errors::SourceError;
+use crate::parser::{
+    AstNode, Block, Call, InOutTypes, List, Match, NodeId, Params, Pipeline, Record, Table,
+    TypeArgs,
+};
+use crate::protocol::Command;
+use crate::resolver::{
+    DeclId, Frame, NameBindings, ScopeId, TypeDecl, TypeDeclId, VarId, Variable,
+};
+use crate::typechecker::{TypeId, Types};
+use std::collections::HashMap;
+
+pub struct RollbackPoint {
+    idx_span_start: usize,
+    idx_nodes: usize,
+    idx_errors: usize,
+    idx_blocks: usize,
+    idx_params: usize,
+    idx_in_out_types: usize,
+    idx_calls: usize,
+    idx_lists: usize,
+    idx_tables: usize,
+    idx_records: usize,
+    idx_matches: usize,
+    idx_type_args: usize,
+    token_pos: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl Span {
+    pub fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Spanned<T> {
+    pub item: T,
+    pub span: Span,
+}
+
+impl<T> Spanned<T> {
+    pub fn new(item: T, span: Span) -> Self {
+        Spanned { item, span }
+    }
+}
+
+#[derive(Clone)]
+pub struct Compiler {
+    // Core information, indexed by NodeId:
+    pub spans: Vec<Span>,
+    pub ast_nodes: Vec<AstNode>,
+    pub node_types: Vec<TypeId>,
+    // node_lifetimes: Vec<AllocationLifetime>,
+    pub blocks: Vec<Block>,            // Blocks, indexed by BlockId
+    pub params: Vec<Params>,           // Params, indexed by ParamsId
+    pub in_out_types: Vec<InOutTypes>, // InOutTypes, indexed by InOutTypesId
+    pub calls: Vec<Call>,              // Calls, indexed by CallId
+    pub lists: Vec<List>,              // Lists, indexed by ListId
+    pub tables: Vec<Table>,            // Tables, indexed by TableId
+    pub records: Vec<Record>,          // Records, indexed by RecordId
+    pub matches: Vec<Match>,           // Matches, indexed by MatchId
+    pub type_args: Vec<TypeArgs>,      // TypeArgs, indexed by TypeArgsId
+    pub pipelines: Vec<Pipeline>,      // Pipelines, indexed by PipelineId
+    pub source: Vec<u8>,
+    pub file_offsets: Vec<(String, usize, usize)>, // fname, start, end
+
+    // name bindings:
+    /// All scope frames ever entered, indexed by ScopeId
+    pub scope: Vec<Frame>,
+    /// Stack of currently entered scope frames
+    pub scope_stack: Vec<ScopeId>,
+    /// Variables, indexed by VarId
+    pub variables: Vec<Variable>,
+    /// Mapping of variable's name node -> Variable
+    pub var_resolution: HashMap<NodeId, VarId>,
+    /// Type declarations, indexed by TypeDeclId
+    pub type_decls: Vec<TypeDecl>,
+    /// Mapping of type decl's name node -> TypeDecl
+    pub type_resolution: HashMap<NodeId, TypeDeclId>,
+    /// Declarations (commands, aliases, externs), indexed by DeclId
+    pub decls: Vec<Box<dyn Command>>,
+    /// Declaration NodeIds, indexed by DeclId
+    pub decl_nodes: Vec<NodeId>,
+    /// Mapping of decl's name node -> Command
+    pub decl_resolution: HashMap<NodeId, DeclId>,
+
+    // Definitions:
+    // indexed by FunId
+    // pub functions: Vec<Function>,
+    // indexed by TypeId
+    // types: Vec<Type>,
+
+    // Use/def
+    // pub call_resolution: HashMap<NodeId, CallTarget>,
+    pub errors: Vec<SourceError>,
+}
+
+impl Default for Compiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Compiler {
+    pub fn new() -> Self {
+        Self {
+            spans: vec![],
+            ast_nodes: vec![],
+            node_types: vec![],
+            blocks: vec![],
+            params: vec![],
+            in_out_types: vec![],
+            calls: vec![],
+            lists: vec![],
+            tables: vec![],
+            records: vec![],
+            matches: vec![],
+            type_args: vec![],
+            pipelines: vec![],
+            source: vec![],
+            file_offsets: vec![],
+
+            scope: vec![],
+            scope_stack: vec![],
+            variables: vec![],
+            var_resolution: HashMap::new(),
+            type_decls: vec![],
+            type_resolution: HashMap::new(),
+            decls: vec![],
+            decl_nodes: vec![],
+            decl_resolution: HashMap::new(),
+
+            // variables: vec![],
+            // functions: vec![],
+            // types: vec![],
+
+            // call_resolution: HashMap::new(),
+            errors: vec![],
+        }
+    }
+
+    pub fn print(&self) {
+        let output = self.display_state();
+        print!("{output}");
+    }
+
+    #[allow(clippy::format_collect)]
+    pub fn display_state(&self) -> String {
+        // TODO: This should say PARSER, not COMPILER
+        let mut result = "==== COMPILER ====\n".to_string();
+
+        for (idx, ast_node) in self.ast_nodes.iter().enumerate() {
+            result.push_str(&format!(
+                "{}: {:?} ({} to {})",
+                idx, ast_node, self.spans[idx].start, self.spans[idx].end
+            ));
+
+            if matches!(
+                ast_node,
+                AstNode::Name | AstNode::Variable | AstNode::Int | AstNode::Float | AstNode::String
+            ) {
+                result.push_str(&format!(
+                    " \"{}\"",
+                    String::from_utf8_lossy(self.get_span_contents(NodeId(idx)))
+                ));
+            }
+
+            result.push('\n');
+        }
+
+        if !self.errors.is_empty() {
+            result.push_str("==== COMPILER ERRORS ====\n");
+            for error in &self.errors {
+                result.push_str(&format!(
+                    "{:?} (NodeId {}): {}\n",
+                    error.severity, error.node_id.0, error.message
+                ));
+            }
+        }
+
+        result
+    }
+
+    pub fn merge_name_bindings(&mut self, name_bindings: NameBindings) {
+        self.scope.extend(name_bindings.scope);
+        self.scope_stack.extend(name_bindings.scope_stack);
+        self.variables.extend(name_bindings.variables);
+        self.var_resolution.extend(name_bindings.var_resolution);
+        self.type_decls.extend(name_bindings.type_decls);
+        self.type_resolution.extend(name_bindings.type_resolution);
+        self.decls.extend(name_bindings.decls);
+        self.decl_nodes.extend(name_bindings.decl_nodes);
+        self.decl_resolution.extend(name_bindings.decl_resolution);
+        self.errors.extend(name_bindings.errors);
+    }
+
+    pub fn merge_types(&mut self, types: Types) {
+        self.node_types.extend(types.node_types);
+        self.errors.extend(types.errors);
+    }
+
+    pub fn add_file(&mut self, fname: &str, contents: &[u8]) {
+        let span_offset = self.source.len();
+
+        self.file_offsets
+            .push((fname.to_string(), span_offset, span_offset + contents.len()));
+
+        self.source.extend_from_slice(contents);
+    }
+
+    pub fn span_offset(&self) -> usize {
+        self.source.len()
+    }
+
+    pub fn get_node(&self, node_id: NodeId) -> &AstNode {
+        &self.ast_nodes[node_id.0]
+    }
+
+    pub fn get_node_mut(&mut self, node_id: NodeId) -> &mut AstNode {
+        &mut self.ast_nodes[node_id.0]
+    }
+
+    pub fn push_node(&mut self, ast_node: AstNode) -> NodeId {
+        self.ast_nodes.push(ast_node);
+
+        NodeId(self.ast_nodes.len() - 1)
+    }
+
+    pub fn get_rollback_point(&self, token_pos: usize) -> RollbackPoint {
+        RollbackPoint {
+            idx_span_start: self.spans.len(),
+            idx_nodes: self.ast_nodes.len(),
+            idx_errors: self.errors.len(),
+            idx_blocks: self.blocks.len(),
+            idx_params: self.params.len(),
+            idx_in_out_types: self.in_out_types.len(),
+            idx_calls: self.calls.len(),
+            idx_lists: self.lists.len(),
+            idx_tables: self.tables.len(),
+            idx_records: self.records.len(),
+            idx_matches: self.matches.len(),
+            idx_type_args: self.type_args.len(),
+            token_pos,
+        }
+    }
+
+    pub fn apply_compiler_rollback(&mut self, rbp: RollbackPoint) -> usize {
+        self.blocks.truncate(rbp.idx_blocks);
+        self.params.truncate(rbp.idx_params);
+        self.in_out_types.truncate(rbp.idx_in_out_types);
+        self.calls.truncate(rbp.idx_calls);
+        self.lists.truncate(rbp.idx_lists);
+        self.tables.truncate(rbp.idx_tables);
+        self.records.truncate(rbp.idx_records);
+        self.matches.truncate(rbp.idx_matches);
+        self.type_args.truncate(rbp.idx_type_args);
+        self.ast_nodes.truncate(rbp.idx_nodes);
+        self.errors.truncate(rbp.idx_errors);
+        self.spans.truncate(rbp.idx_span_start);
+
+        rbp.token_pos
+    }
+
+    /// Get span of node
+    pub fn get_span(&self, node_id: NodeId) -> Span {
+        *self
+            .spans
+            .get(node_id.0)
+            .expect("internal error: missing span of node")
+    }
+
+    /// Get the source contents of a span of a node
+    pub fn get_span_contents(&self, node_id: NodeId) -> &[u8] {
+        let span = self.get_span(node_id);
+        self.source
+            .get(span.start..span.end)
+            .expect("internal error: missing source of span")
+    }
+
+    /// Get the source contents of a span
+    pub fn get_span_contents_manual(&self, span_start: usize, span_end: usize) -> &[u8] {
+        self.source
+            .get(span_start..span_end)
+            .expect("internal error: missing source of span")
+    }
+
+    /// Get the source contents of a node
+    pub fn node_as_str(&self, node_id: NodeId) -> &str {
+        std::str::from_utf8(self.get_span_contents(node_id))
+            .expect("internal error: expected utf8 string")
+    }
+
+    /// Get the source contents of a node as i64
+    pub fn node_as_i64(&self, node_id: NodeId) -> i64 {
+        self.node_as_str(node_id)
+            .parse::<i64>()
+            .expect("internal error: expected i64")
+    }
+
+    /// Get node as a block
+    pub fn get_block(&self, node_id: NodeId) -> &Block {
+        let AstNode::Block(block_id) = self.ast_nodes[node_id.0] else {
+            unreachable!(
+                "internal error: expected block, got '{:?}'",
+                self.ast_nodes[node_id.0]
+            );
+        };
+        &self.blocks[block_id.0]
+    }
+
+    pub fn get_params(&self, node_id: NodeId) -> &Params {
+        let AstNode::Params(params_id) = self.ast_nodes[node_id.0] else {
+            unreachable!(
+                "internal error: expected params, got '{:?}'",
+                self.ast_nodes[node_id.0]
+            );
+        };
+        &self.params[params_id.0]
+    }
+
+    pub fn get_in_out_types(&self, node_id: NodeId) -> &InOutTypes {
+        let AstNode::InOutTypes(in_out_types_id) = self.ast_nodes[node_id.0] else {
+            unreachable!(
+                "internal error: expected in_out_types, got '{:?}'",
+                self.ast_nodes[node_id.0]
+            );
+        };
+        &self.in_out_types[in_out_types_id.0]
+    }
+
+    pub fn get_call(&self, node_id: NodeId) -> &Call {
+        let AstNode::Call(call_id) = self.ast_nodes[node_id.0] else {
+            unreachable!(
+                "internal error: expected call, got '{:?}'",
+                self.ast_nodes[node_id.0]
+            );
+        };
+        &self.calls[call_id.0]
+    }
+
+    pub fn get_list(&self, node_id: NodeId) -> &List {
+        let AstNode::List(list_id) = self.ast_nodes[node_id.0] else {
+            unreachable!(
+                "internal error: expected list, got '{:?}'",
+                self.ast_nodes[node_id.0]
+            );
+        };
+        &self.lists[list_id.0]
+    }
+
+    pub fn get_table(&self, node_id: NodeId) -> &Table {
+        let AstNode::Table(table_id) = self.ast_nodes[node_id.0] else {
+            unreachable!(
+                "internal error: expected table, got '{:?}'",
+                self.ast_nodes[node_id.0]
+            );
+        };
+        &self.tables[table_id.0]
+    }
+
+    pub fn get_record(&self, node_id: NodeId) -> &Record {
+        let AstNode::Record(record_id) = self.ast_nodes[node_id.0] else {
+            unreachable!(
+                "internal error: expected record, got '{:?}'",
+                self.ast_nodes[node_id.0]
+            );
+        };
+        &self.records[record_id.0]
+    }
+
+    pub fn get_match(&self, node_id: NodeId) -> &Match {
+        let AstNode::Match(match_id) = self.ast_nodes[node_id.0] else {
+            unreachable!(
+                "internal error: expected match, got '{:?}'",
+                self.ast_nodes[node_id.0]
+            );
+        };
+        &self.matches[match_id.0]
+    }
+
+    pub fn get_type_args(&self, node_id: NodeId) -> &TypeArgs {
+        let AstNode::TypeArgs(type_args_id) = self.ast_nodes[node_id.0] else {
+            unreachable!(
+                "internal error: expected type args, got '{:?}'",
+                self.ast_nodes[node_id.0]
+            );
+        };
+        &self.type_args[type_args_id.0]
+    }
+}

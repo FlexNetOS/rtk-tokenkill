@@ -1,0 +1,15 @@
+export use commands.nu [
+    "dependencies"
+    "embed-add"
+    "embeds-remove"
+    "embeds-update"
+    "examples-update"
+    "expand-code"
+    "extract-module-command"
+    "filter-commands-with-no-tests"
+    "generate-numd"
+    "list-module-exports"
+    "list-module-interface"
+    "module-commands-code-to-record"
+    "set-x"
+]

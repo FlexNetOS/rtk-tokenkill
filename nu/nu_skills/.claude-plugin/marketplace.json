@@ -1,0 +1,30 @@
+{
+  "name": "nushell-skills",
+  "owner": {
+    "name": "nushell-prophet"
+  },
+  "metadata": {
+    "description": "Claude Code skills for opinionated Nushell development",
+    "pluginRoot": "./plugins"
+  },
+  "plugins": [
+    {
+      "name": "nushell-completions",
+      "source": "./plugins/nushell-completions",
+      "description": "Generate Nushell custom completions — completer functions, string@completer annotations, inline @[...] lists, @complete attribute, extern definitions.",
+      "version": "1.2.0"
+    },
+    {
+      "name": "nushell-style",
+      "source": "./plugins/nushell-style",
+      "description": "Opinionated Nushell patterns, pipeline composition, command choices, formatting (Topiary), testing (nutest), NUON, debugging (--ide-check), toolkit.nu, and MCP server conventions for .nu files.",
+      "version": "1.114.1"
+    },
+    {
+      "name": "nushell-history",
+      "source": "./plugins/nushell-history",
+      "description": "Inspect and rewrite the Nushell sqlite command history — `history --long | where ...` recipes and `nu-history-tools` mutation flows (retag cwd, remove, etc.)",
+      "version": "0.1.0"
+    }
+  ]
+}

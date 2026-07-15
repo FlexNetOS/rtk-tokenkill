@@ -1,0 +1,568 @@
+#![doc = include_str!("../README.md")]
+#![deny(warnings, rustdoc::broken_intra_doc_links)]
+#![warn(
+    clippy::explicit_iter_loop,
+    clippy::explicit_into_iter_loop,
+    clippy::semicolon_if_nothing_returned,
+    clippy::doc_markdown,
+    clippy::manual_let_else
+)]
+
+use clap::{CommandFactory, Parser};
+use ignore::{overrides::OverrideBuilder, DirEntry, WalkBuilder};
+use log::{info, trace};
+use nu_ansi_term::{Color, Style};
+use nu_formatter::config::Config;
+use nu_formatter::config_error::ConfigError;
+use nu_formatter::FileDiagnostic;
+use nu_formatter::Mode;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use std::convert::TryFrom;
+use std::{
+    collections::BTreeMap,
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
+
+const DEFAULT_CONFIG_FILE: &str = "nufmt.nuon";
+
+/// The possible exit codes
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExitCode {
+    /// nufmt terminates successfully, regardless of whether files or stdin were formatted.
+    Success = 0,
+    /// only used in check mode: nufmt terminates successfully and at least one file would be formatted if check mode was off.
+    CheckFailed = 1,
+    /// nufmt terminates abnormally due to invalid configuration, invalid CLI options, or an internal error.
+    Failure = 2,
+}
+
+impl ExitCode {
+    fn code(self) -> i32 {
+        self as i32
+    }
+}
+
+/// the CLI signature of the `nufmt` executable.
+#[derive(Parser)]
+#[command(author, version, about)]
+struct Cli {
+    #[arg(
+        value_name = "FILES",
+        conflicts_with("stdin"),
+        help = "One of more Nushell files or directories to format"
+    )]
+    files: Vec<PathBuf>,
+
+    #[arg(
+        long,
+        conflicts_with = "stdin",
+        conflicts_with = "files",
+        conflicts_with = "all_recurse",
+        help = "Format all .nu files in the current directory (non-recursive)"
+    )]
+    all: bool,
+
+    #[arg(
+        long,
+        conflicts_with = "stdin",
+        conflicts_with = "files",
+        conflicts_with = "all",
+        help = "Format all .nu files recursively from the current directory downward"
+    )]
+    all_recurse: bool,
+
+    #[arg(
+        long,
+        conflicts_with = "stdin",
+        help = "Avoid writing any formatted files back; instead, exit with a non-zero status code if any files would have been modified, and zero otherwise"
+    )]
+    dry_run: bool,
+
+    #[arg(
+        long,
+        conflicts_with = "dry_run",
+        conflicts_with = "files",
+        help = "A string of Nushell directly given to the formatter"
+    )]
+    stdin: bool,
+
+    #[arg(short, long, help = "nufmt configuration file")]
+    config: Option<PathBuf>,
+}
+
+fn exit_with_code(exit_code: ExitCode) -> ! {
+    let code = exit_code.code();
+    trace!("exit code: {code}");
+
+    // NOTE: this immediately terminates the process without doing any cleanup,
+    // so make sure to finish all necessary cleanup before this is called.
+    std::process::exit(code)
+}
+
+fn main() {
+    if std::env::var_os("RUST_LOG").is_some() {
+        let _ = env_logger::try_init();
+    }
+
+    let cli = Cli::parse();
+    let has_format_target = !cli.files.is_empty() || cli.stdin || cli.all || cli.all_recurse;
+
+    if !has_format_target && cli.config.is_none() {
+        Cli::command()
+            .print_help()
+            .expect("Unexpected error occurred when printing help");
+        println!();
+        exit_with_code(ExitCode::Success);
+    }
+
+    trace!("received cli.files: {:?}", cli.files);
+    trace!("received cli.stdin: {:?}", cli.stdin);
+    trace!("received cli.all: {:?}", cli.all);
+    trace!("received cli.all_recurse: {:?}", cli.all_recurse);
+    trace!("received cli.config: {:?}", cli.config);
+
+    let config = match load_config(cli.config) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("{}: {}", Color::LightRed.paint("error"), &err);
+            exit_with_code(ExitCode::Failure);
+        }
+    };
+
+    let exit_code = if cli.stdin {
+        format_stdin(&config)
+    } else {
+        let (paths, recurse) = if cli.all {
+            (vec![PathBuf::from(".")], false)
+        } else if cli.all_recurse {
+            (vec![PathBuf::from(".")], true)
+        } else {
+            (cli.files, true)
+        };
+
+        format_files_from_paths(paths, &config, cli.dry_run, recurse)
+    };
+
+    std::io::stdout()
+        .flush()
+        .expect("Unexpected error occurred when flushing stdout");
+
+    exit_with_code(exit_code);
+}
+
+/// Load configuration from file or use defaults
+fn load_config(cli_config: Option<PathBuf>) -> Result<Config, ConfigError> {
+    let config_file = cli_config.or_else(|| find_in_parent_dirs(DEFAULT_CONFIG_FILE));
+
+    match config_file {
+        None => Ok(Config::default()),
+        Some(path) => read_config(&path),
+    }
+}
+
+fn read_config(path: &Path) -> Result<Config, ConfigError> {
+    let content = std::fs::read_to_string(path)?;
+    let content_nuon = nuon::from_nuon(&content, None)?;
+    Config::try_from(content_nuon)
+}
+
+/// Format a string passed via stdin and output it directly to stdout
+fn format_stdin(config: &Config) -> ExitCode {
+    let stdin_input: String = io::stdin()
+        .lines()
+        .map_while(Result::ok)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    match nu_formatter::format_string(&stdin_input, config) {
+        Ok(output) => {
+            println!("{output}");
+            ExitCode::Success
+        }
+        Err(err) => {
+            eprintln!(
+                "{}: {}",
+                Color::LightRed.paint("Could not format stdin"),
+                err
+            );
+            ExitCode::Failure
+        }
+    }
+}
+
+/// Format files from the given paths
+fn format_files_from_paths(
+    paths: Vec<PathBuf>,
+    config: &Config,
+    dry_run: bool,
+    recurse: bool,
+) -> ExitCode {
+    let (target_files, invalid_files) = match discover_nu_files(paths, &config.excludes, recurse) {
+        Ok(files) => files,
+        Err(err) => {
+            eprintln!("{}: {}", Color::LightRed.paint("error"), err);
+            return ExitCode::Failure;
+        }
+    };
+
+    let mode = if dry_run {
+        Mode::DryRun
+    } else {
+        Mode::default()
+    };
+
+    let mut results = mark_invalid_files(invalid_files);
+    results.extend(format_files(target_files, config, &mode));
+    display_diagnostic_and_compute_exit_code(&results, dry_run)
+}
+
+/// Mark invalid file paths as failures
+fn mark_invalid_files(files: Vec<PathBuf>) -> Vec<(PathBuf, FileDiagnostic)> {
+    files
+        .into_iter()
+        .map(|file| {
+            (
+                file,
+                FileDiagnostic::Failure("cannot find the file specified".to_string()),
+            )
+        })
+        .collect()
+}
+
+/// Format a list of files and modify them in place
+/// If check mode is on, only check the files but do not modify them
+fn format_files(
+    files: Vec<PathBuf>,
+    config: &Config,
+    mode: &Mode,
+) -> Vec<(PathBuf, FileDiagnostic)> {
+    files
+        .into_par_iter()
+        .map(|file| {
+            info!("formatting file: {:?}", &file);
+            nu_formatter::format_single_file(file, config, mode)
+        })
+        .collect()
+}
+
+/// Display results and return the appropriate exit code after formatting
+fn display_diagnostic_and_compute_exit_code(
+    results: &[(PathBuf, FileDiagnostic)],
+    check_mode: bool,
+) -> ExitCode {
+    let mut stats = FormattingStats::default();
+    let mut warning_messages = Vec::new();
+
+    let file_failed_msg = if check_mode {
+        "Failed to check"
+    } else {
+        "Failed to format"
+    };
+
+    for (file, result) in results {
+        match result {
+            FileDiagnostic::AlreadyFormatted => stats.already_formatted += 1,
+            FileDiagnostic::Reformatted => {
+                stats.reformatted += 1;
+                if check_mode {
+                    warning_messages.push(format!(
+                        "Would reformat: {}",
+                        Style::new().bold().paint(make_relative(file))
+                    ));
+                }
+            }
+            FileDiagnostic::Failure(reason) => {
+                stats.failures += 1;
+                eprintln!(
+                    "{}: {} {}: {}",
+                    Color::LightRed.paint("error"),
+                    Style::new().bold().paint(file_failed_msg),
+                    Style::new().bold().paint(make_relative(file)),
+                    reason
+                );
+            }
+        }
+    }
+
+    // Print warnings after processing
+    for msg in warning_messages {
+        println!("{msg}");
+    }
+
+    // Print summary and determine exit code
+    stats.print_summary(check_mode)
+}
+
+/// Statistics about formatting results
+#[derive(Default)]
+struct FormattingStats {
+    already_formatted: usize,
+    reformatted: usize,
+    failures: usize,
+}
+
+impl FormattingStats {
+    fn total(&self) -> usize {
+        self.already_formatted + self.reformatted + self.failures
+    }
+
+    fn print_summary(&self, check_mode: bool) -> ExitCode {
+        if self.total() == 0 {
+            print!(
+                "{}: no Nushell files found under the given path(s)",
+                Color::LightYellow.paint("warning"),
+            );
+            return ExitCode::Success;
+        }
+
+        if self.reformatted > 0 {
+            let msg = if check_mode {
+                "would be reformatted"
+            } else if self.reformatted == 1 {
+                "was formatted"
+            } else {
+                "were formatted"
+            };
+            println!(
+                "{} file{} {}",
+                self.reformatted,
+                plural(self.reformatted),
+                msg
+            );
+        }
+
+        if self.already_formatted > 0 {
+            println!(
+                "{} file{} already formatted",
+                self.already_formatted,
+                plural(self.already_formatted)
+            );
+        }
+
+        if self.failures > 0 {
+            ExitCode::Failure
+        } else if check_mode && self.reformatted > 0 {
+            ExitCode::CheckFailed
+        } else {
+            ExitCode::Success
+        }
+    }
+}
+
+/// Return "s" for plural, empty string for singular
+fn plural(count: usize) -> &'static str {
+    if count == 1 {
+        ""
+    } else {
+        "s"
+    }
+}
+
+/// Return the different files to analyze, filtering by .nu extension and config excludes
+fn discover_nu_files(
+    paths: Vec<PathBuf>,
+    excludes: &[String],
+    recurse: bool,
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>), ConfigError> {
+    let (valid_paths, invalid_paths): (Vec<_>, Vec<_>) =
+        paths.into_iter().partition(|p| p.exists());
+
+    let overrides = build_overrides(excludes)?;
+
+    let nu_files = valid_paths
+        .iter()
+        .flat_map(|path| {
+            let mut builder = WalkBuilder::new(path);
+            if !recurse {
+                builder.max_depth(Some(1));
+            }
+
+            builder
+                .overrides(overrides.clone())
+                .build()
+                .filter_map(Result::ok)
+                .filter(is_nu_file)
+                .map(|entry| entry.into_path())
+        })
+        .collect();
+
+    let nu_files = deduplicate_discovered_files(nu_files);
+
+    Ok((nu_files, invalid_paths))
+}
+
+fn deduplicate_discovered_files(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut unique: BTreeMap<PathBuf, PathBuf> = BTreeMap::new();
+
+    for path in paths {
+        let key = path.canonicalize().unwrap_or_else(|_| path.clone());
+        unique.entry(key).or_insert(path);
+    }
+
+    unique.into_values().collect()
+}
+
+/// Build override rules for excluded patterns
+fn build_overrides(excludes: &[String]) -> Result<ignore::overrides::Override, ConfigError> {
+    let mut builder = OverrideBuilder::new(".");
+    for pattern in excludes {
+        builder.add(&format!("!{pattern}"))?;
+    }
+    Ok(builder.build()?)
+}
+
+/// Return whether a `DirEntry` is a .nu file
+fn is_nu_file(entry: &DirEntry) -> bool {
+    entry.file_type().is_some_and(|ft| ft.is_file())
+        && entry.path().extension().is_some_and(|ext| ext == "nu")
+}
+
+/// Convert a path to a relative path string for display
+fn make_relative(path: &Path) -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| path.strip_prefix(&cwd).ok())
+        .unwrap_or(path)
+        .display()
+        .to_string()
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_string()
+}
+
+/// Search for `filename` in current or any parent directories
+fn find_in_parent_dirs(filename: &str) -> Option<PathBuf> {
+    let start_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    let mut current = Some(start_dir.as_path());
+    while let Some(dir) = current {
+        let candidate = dir.join(filename);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn clap_cli_construction() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn read_valid_config_empty() {
+        let dir = tempdir().unwrap();
+        let config_file = dir.path().join("nufmt.nuon");
+        fs::write(&config_file, "").unwrap();
+
+        let config = read_config(&config_file).expect("Config should be valid");
+        assert_eq!(config, Config::default());
+    }
+
+    #[rstest]
+    #[case(r#"{line_length: 120, exclude: ["a*nu", "b*.nu"]}"#)]
+    #[case(r#"{indent_char: "tab", line_length: 120}"#)]
+    fn read_valid_config(#[case] config_content: &str) {
+        let dir = tempdir().unwrap();
+        let config_file = dir.path().join("nufmt.nuon");
+        fs::write(&config_file, config_content).unwrap();
+
+        let config = read_config(&config_file).expect("Config should be valid");
+        assert_eq!(config.line_length, 120_usize);
+        if config_content.contains("exclude") {
+            assert_eq!(config.excludes.len(), 2_usize);
+        }
+        if config_content.contains(r#"indent_char: "tab""#) {
+            assert_eq!(config.indent_char, nu_formatter::config::IndentChar::Tab);
+        }
+    }
+
+    #[rstest]
+    #[case(r#"some string"#)]
+    #[case(r#"{unknown: 1}"#)]
+    #[case(r#"{line_length: -1}"#)]
+    #[case(r#"{line_length: "120"}"#)]
+    #[case(r#"{exclude: "a*nu"}"#)]
+    #[case(r#"{exclude: ["a*nu", 1]}"#)]
+    #[case(r#"{indent_char: 1}"#)]
+    #[case(r#"{indent_char: "tabs"}"#)]
+    fn read_invalid_config(#[case] config_content: &str) {
+        let dir = tempdir().unwrap();
+        let config_file = dir.path().join("nufmt.nuon");
+        fs::write(&config_file, config_content).unwrap();
+
+        let config = read_config(&config_file);
+        assert!(config.is_err());
+    }
+
+    #[rstest]
+    #[case(vec![
+        (PathBuf::from("a.nu"), FileDiagnostic::AlreadyFormatted),
+        (PathBuf::from("b.nu"), FileDiagnostic::AlreadyFormatted),
+    ], false, ExitCode::Success)]
+    #[case(vec![
+        (PathBuf::from("a.nu"), FileDiagnostic::AlreadyFormatted),
+        (PathBuf::from("b.nu"), FileDiagnostic::AlreadyFormatted),
+    ], true, ExitCode::Success)]
+    #[case(vec![
+        (PathBuf::from("a.nu"), FileDiagnostic::AlreadyFormatted),
+        (PathBuf::from("b.nu"), FileDiagnostic::Reformatted),
+    ], false, ExitCode::Success)]
+    #[case(vec![
+        (PathBuf::from("a.nu"), FileDiagnostic::AlreadyFormatted),
+        (PathBuf::from("b.nu"), FileDiagnostic::Reformatted),
+    ], true, ExitCode::CheckFailed)]
+    #[case(vec![
+        (PathBuf::from("a.nu"), FileDiagnostic::AlreadyFormatted),
+        (PathBuf::from("b.nu"), FileDiagnostic::Reformatted),
+        (PathBuf::from("c.nu"), FileDiagnostic::Failure("some error".to_string())),
+    ], false, ExitCode::Failure)]
+    #[case(vec![
+        (PathBuf::from("a.nu"), FileDiagnostic::AlreadyFormatted),
+        (PathBuf::from("b.nu"), FileDiagnostic::Reformatted),
+        (PathBuf::from("c.nu"), FileDiagnostic::Failure("some error".to_string())),
+    ], true, ExitCode::Failure)]
+    fn exit_code_tests(
+        #[case] results: Vec<(PathBuf, FileDiagnostic)>,
+        #[case] check_mode: bool,
+        #[case] expected: ExitCode,
+    ) {
+        let exit_code = display_diagnostic_and_compute_exit_code(&results, check_mode);
+        assert_eq!(exit_code, expected);
+    }
+
+    #[test]
+    fn discover_nu_files_deduplicates_overlapping_paths() {
+        let dir = tempdir().unwrap();
+        let nested = dir.path().join("nested");
+        fs::create_dir_all(&nested).unwrap();
+
+        let target = nested.join("a.nu");
+        fs::write(&target, "let x = 1").unwrap();
+
+        let (files, invalid) =
+            discover_nu_files(vec![dir.path().to_path_buf(), nested.clone()], &[], true)
+                .expect("discovery should succeed");
+
+        assert!(invalid.is_empty());
+
+        let canonical_target = target.canonicalize().unwrap();
+        let matches = files
+            .iter()
+            .filter_map(|path| path.canonicalize().ok())
+            .filter(|path| *path == canonical_target)
+            .count();
+
+        assert_eq!(matches, 1, "file should be discovered exactly once");
+    }
+}

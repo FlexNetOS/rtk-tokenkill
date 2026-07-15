@@ -1,0 +1,50 @@
+[package]
+name = "nufmt"
+version = "0.1.4"
+edition = "2021"
+authors = ["The NuShell Contributors"]
+license = "MIT"
+description = "Formats nushell extremely fast"
+homepage = "https://github.com/nushell/nufmt"
+repository = "https://github.com/nushell/nufmt"
+readme = "README.md"
+keywords = ["nu", "nushell", "formatting", "cli"]
+categories = ["command-line-utilities"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "4.6.1", optional = true, features = ["unicode", "derive"] }
+env_logger = "0.11.10"
+ignore = "0.4.25"
+log = "0.4.29"
+nu-ansi-term = "0.50.3"
+nu-cmd-lang = "0.112.2"
+nu-parser = "0.112.2"
+nu-protocol = "0.112.2"
+nu-utils = "0.112.2"
+nuon = "0.112.2"
+rayon = "1.12.0"
+thiserror = "2.0.18"
+
+[dev-dependencies]
+criterion = "0.8.2"
+rstest = "0.26.1"
+tempfile = "3.27.0"
+
+[features]
+default = ["bin"]
+bin = ["clap"]
+
+[lib]
+name = "nu_formatter"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nufmt"
+path = "src/main.rs"
+required-features = ["bin"]
+
+[[bench]]
+name = "file-format-bench"
+harness = false

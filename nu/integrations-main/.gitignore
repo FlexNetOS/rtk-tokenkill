@@ -1,0 +1,14 @@
+.env
+*.deb
+*.key
+*.rpm
+*.apk
+*log.txt
+*.pkg.tar.zst
+.vscode
+key.gpg
+release/
+wix/nu/
+wix/obj/
+signing-key.pub
+prompts.md
