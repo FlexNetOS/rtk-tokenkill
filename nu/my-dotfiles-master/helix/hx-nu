@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+# Launcher for the Helix↔nushell integration.
+# The config is helix-owned; it loads the nu-hx helper module and, when present,
+# the cozy-owned modules-core.nu (the missing-file handling lives there as a
+# parse-time conditional, so a bare-dotfiles host degrades gracefully).
+# Not a nu script because: the outer `nu` running it would parse Helix's passthrough
+# flags (--stdin, -c) as its own, and -c collides with a script-file argument.
+exec nu --config "$HOME/.config/helix/nu-hx-config.nu" "$@"

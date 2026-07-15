@@ -1,0 +1,159 @@
+name: nushell
+base: core24
+license: MIT
+source-code: https://github.com/hustcer/nushell-snap
+issues: https://github.com/hustcer/nushell-snap/issues
+contact: https://github.com/hustcer/nushell-snap/issues
+adopt-info: nushell  # Note: snap version is set from tag
+
+title: Nushell
+icon: nushell-original.png
+website: https://www.nushell.sh/
+summary: A new type of shell
+description: |
+  Rather than being either a shell, or a programming language, Nushell connects both by
+  bringing a rich programming language and a full-featured shell together into one package.
+
+confinement: classic
+grade: stable
+
+platforms:
+  amd64:
+  arm64:
+  armhf:
+  riscv64:
+  s390x:
+  ppc64el:
+
+apps:
+  nu:
+    command: bin/nu
+  nu-plugin-stress-internals:
+    command: bin/nu_plugin_stress_internals
+  nu-plugin-gstat:
+    command: bin/nu_plugin_gstat
+  nu-plugin-formats:
+    command: bin/nu_plugin_formats
+  nu-plugin-polars:
+    command: bin/nu_plugin_polars
+  nu-plugin-query:
+    command: bin/nu_plugin_query
+  nu-plugin-inc:
+    command: bin/nu_plugin_inc
+  nu-plugin-custom-values:
+    command: bin/nu_plugin_custom_values
+
+
+parts:
+  nushell:
+    source: https://github.com/nushell/nushell.git
+    source-tag: "0.114.1"
+    override-pull: |
+      craftctl default
+      craftctl set version="$(git describe --tags --always)"
+    plugin: rust
+    build-packages:
+      - libxcb-composite0-dev
+      - pkg-config
+      - libssl-dev
+      - build-essential
+      - linux-libc-dev
+    rust-channel: stable
+    rust-cargo-parameters:
+      - "--features full"
+    build-snaps: [rustup]
+    build-attributes:
+      - enable-patchelf
+    prime:
+      - bin/nu
+
+  x-nu-plugin-common: &common
+    after: [nushell]
+    source: https://github.com/nushell/nushell.git
+    source-tag: "0.114.1"
+    plugin: rust
+    build-packages:
+      - libxcb-composite0-dev
+      - pkg-config
+      - libssl-dev
+      - build-essential
+      - linux-libc-dev
+    rust-channel: stable
+    build-snaps: [rustup]
+    build-attributes:
+      - enable-patchelf
+    override-build: |
+      # This is an anchor-only part used for YAML config reuse via &common.
+      # Each plugin part overrides this no-op with 'craftctl default'.
+      echo "Common part; no-op"
+
+  nu-plugin-stress-internals:
+    <<: *common
+    after: [x-nu-plugin-common]
+    rust-path:
+      - ./crates/nu_plugin_stress_internals
+    override-build: |
+      # Override the *common no-op
+      craftctl default
+    prime:
+      - bin/nu_plugin_stress_internals
+  nu-plugin-gstat:
+    <<: *common
+    after: [x-nu-plugin-common]
+    rust-path:
+      - ./crates/nu_plugin_gstat
+    override-build: |
+      # Override the *common no-op
+      craftctl default
+    prime:
+      - bin/nu_plugin_gstat
+  nu-plugin-formats:
+    <<: *common
+    after: [x-nu-plugin-common]
+    rust-path:
+      - ./crates/nu_plugin_formats
+    override-build: |
+      # Override the *common no-op
+      craftctl default
+    prime:
+      - bin/nu_plugin_formats
+  nu-plugin-polars:
+    <<: *common
+    after: [x-nu-plugin-common]
+    rust-path:
+      - ./crates/nu_plugin_polars
+    override-build: |
+      # Override the *common no-op
+      craftctl default
+    prime:
+      - bin/nu_plugin_polars
+  nu-plugin-query:
+    <<: *common
+    after: [x-nu-plugin-common]
+    rust-path:
+      - ./crates/nu_plugin_query
+    override-build: |
+      # Override the *common no-op
+      craftctl default
+    prime:
+      - bin/nu_plugin_query
+  nu-plugin-inc:
+    <<: *common
+    after: [x-nu-plugin-common]
+    rust-path:
+      - ./crates/nu_plugin_inc
+    override-build: |
+      # Override the *common no-op
+      craftctl default
+    prime:
+      - bin/nu_plugin_inc
+  nu-plugin-custom-values:
+    <<: *common
+    after: [x-nu-plugin-common]
+    rust-path:
+      - ./crates/nu_plugin_custom_values
+    override-build: |
+      # Override the *common no-op
+      craftctl default
+    prime:
+      - bin/nu_plugin_custom_values

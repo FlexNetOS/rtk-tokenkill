@@ -1,0 +1,35 @@
+name: Test NU Packages from NPM
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+
+jobs:
+  test-npm-pkg:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+    name: Test Nu@npm on x64-${{matrix.os}}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Test Nu Install from NPM Registry
+        shell: bash
+        run: |
+          export NU_TAG=`jq -r .distTag npm/app/package.json`
+          echo "Installing Nu@$NU_TAG from npm..."
+          npm i --location=global "nushell@$NU_TAG" --registry https://registry.npmjs.org
+          echo 'Nu version info:'; nu -c 'version'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

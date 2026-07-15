@@ -1,0 +1,53 @@
+{
+  "name": "setup-nu",
+  "version": "3.25.0",
+  "actionVer": "v3.25",
+  "description": "A Github Action to Setup a Nushell Environment to Run Nu Scripts or Commands",
+  "type": "module",
+  "main": "dist/index.js",
+  "private": true,
+  "scripts": {
+    "fmt": "biome format . --write",
+    "lint": "biome lint **/*.ts",
+    "build": "nu nu/build.nu",
+    "run": "pnpm run build && RUNNER_TOOL_CACHE=./runner/cache RUNNER_TEMP=./runner/temp node dist/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hustcer/setup-nu.git"
+  },
+  "author": "hustcer <hustcer@outlook.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/hustcer/setup-nu/issues"
+  },
+  "homepage": "https://github.com/hustcer/setup-nu#readme",
+  "dependencies": {
+    "@actions/core": "^3.0.1",
+    "@actions/tool-cache": "^4.0.0",
+    "@octokit/rest": "^22.0.1",
+    "globby": "^16.2.1",
+    "shelljs": "^0.10.0",
+    "undici": "^8.7.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.3",
+    "@types/node": "^26.1.1",
+    "@types/semver": "^7.7.1",
+    "@types/shelljs": "^0.10.0",
+    "@vercel/ncc": "^0.44.1",
+    "cspell": "^10.0.1",
+    "lefthook": "^2.1.10",
+    "semver": "^7.8.5",
+    "typescript": "^6.0.3"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10"
+  },
+  "pnpm": {
+    "overrides": {
+      "undici@>=4.5.0 <5.28.5": ">=5.28.5"
+    }
+  }
+}

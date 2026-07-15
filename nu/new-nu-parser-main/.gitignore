@@ -1,0 +1,13 @@
+/target
+
+**/*.rs.bk
+
+.vscode/*
+.DS_Store
+
+# Allow everyone to customize .envrc
+/.envrc
+# Output / cache from direnv
+/.direnv
+# Output from nix
+/result

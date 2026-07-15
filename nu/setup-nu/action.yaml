@@ -1,0 +1,42 @@
+# Setup-nu Action
+#   @author: hustcer
+#   @created: 2022/04/28 18:50:20
+# REF:
+#   1. https://docs.github.com/cn/actions/creating-actions/about-custom-actions
+#   2. https://docs.github.com/cn/actions/creating-actions/metadata-syntax-for-github-actions
+#   3. All available versions: https://api.github.com/repos/nushell/nushell/tags
+#   4. All nushell release: https://api.github.com/repos/nushell/nushell/releases
+
+name: 'Setup Nu'
+author: 'hustcer'
+description: 'Setup a Nushell Environment to Run Nu Scripts or Commands'
+
+branding:
+  icon: 'terminal'
+  color: 'purple'
+
+inputs:
+  version:
+    default: '*'
+    required: false
+    description: 'A valid semver specifier of nushell version to install.'
+  features:
+    default: 'default'
+    required: false
+    description: 'Nushell features to install, should be `full` or `default`, `full` can be used for Nu 0.86 ~ 0.93.'
+  check-latest:
+    default: false
+    required: false
+    description: 'Set this option if you want the action to check for the latest available version.'
+  enable-plugins:
+    default: false
+    required: false
+    description: 'Enable registering of plugins'
+  github-token:
+    description: 'GitHub token or PAT token'
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: 'node24'
+  main: 'dist/index.js'

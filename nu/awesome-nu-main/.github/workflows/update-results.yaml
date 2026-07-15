@@ -1,0 +1,31 @@
+on:
+  # push:
+  #  branches: 
+  #    - main
+  workflow_dispatch: 
+  schedule:
+    - cron: '0 3 * * 3' # At 03:00 on Wednesday
+
+name: Update plugin_details.md
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+        -   uses: actions/checkout@v2
+        -   name: Setup Nushell
+            uses: hustcer/setup-nu@v3
+            with:
+              version: 0.105.1
+            env:
+              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        -   name: Update plugin list
+            env:
+              OUTPUT: plugin_details.md
+              CONFIG_FILE: config.yaml
+            run: nu bin/update-plugins.nu
+                
+        -   uses: EndBug/add-and-commit@v9 
+            with:
+                add: plugin_details.md # Only commit+push the output file 
+                author_name: GitHub-Action

@@ -1,0 +1,55 @@
+# A Terminal Wordle game.
+# The code is based on https://gist.github.com/huytd/6a1a6a7b34a0d0abcac00b47e3d01513 ,but slightly personalized.
+
+# a simple terminal Wordle game!
+export def main [
+  --unlimited(-u) # Play the game in unlimited mode.
+  --max_count(-M) : int = 6 # Give yourself more chances than default
+  --alternative_source(-a) : string = "https://raw.githubusercontent.com/charlesreid1/five-letter-words/master/sgb-words.txt" # Alternative link to provide as a word source
+] {
+  let words = (if ($alternative_source | str starts-with "http") {http get $alternative_source} else {open $alternative_source} | lines)
+  let word = ($words | get (random int 0..($words | length)))
+  if ((($words | each {|it| $it | str length}) | where $it != 5 | length) != 0 ) {
+    print $"(ansi rb)Warning:(ansi reset) The words list contains words that are not length 5"
+  }
+  mut end = false
+  mut guess_count = 0
+  mut avail = "abcdefghijklmnopqrstuvwxyz"
+  while (not ($end)) {
+    $guess_count += 1
+    if ($guess_count <= $max_count or $unlimited) {
+      print $"(ansi xterm_aquamarine1a)Enter your guess (ansi reset)\((ansi green)($guess_count)(ansi reset)/(ansi yellow)(if ($unlimited) {inf} else {$max_count})(ansi reset)\)"
+      let guess = (input | str downcase)
+      if ($guess | str length) == 5 and ($words | any {|w| $w == $guess}) {
+        mut out = ""
+        mut checked = $word
+        for i in ($guess | split chars | enumerate) {
+          if ($i.item == ($word | str substring ($i.index)..($i.index)) ) {
+            $out += $"(ansi green_reverse)($i.item)(ansi reset)"
+            $avail = ($avail | str replace $i.item $"(ansi green_reverse)($i.item)(ansi white_reverse)")
+            $checked = ($checked | str replace $i.item "")
+          } else if ( $i.item in $checked) {
+            $out += $"(ansi yellow_reverse)($i.item)(ansi reset)"
+            $avail = ($avail | str replace $i.item $"(ansi yellow_reverse)($i.item)(ansi white_reverse)")
+            $checked = ($checked | str replace $i.item "")
+          } else {
+            $out += $"(ansi white_reverse)($i.item)(ansi reset)"
+            $avail = ($avail | str replace $i.item "")
+          }
+        }
+        $avail = $"(ansi white_reverse)($avail)(ansi reset)"
+        print $"($out)        possible -> ($avail)"
+        if ($guess == $word) {
+          $end = true
+          print $"(ansi xterm_green1 )You guessed right!(ansi reset)"
+        }
+      } else {
+        print "please enter a valid [5 letter] word!"
+        $guess_count -= 1
+      }
+    } else {
+      print $"(ansi yellow )You loose, the word was: (ansi red)($word)(ansi reset)"
+      $end = true
+    }
+  }
+}

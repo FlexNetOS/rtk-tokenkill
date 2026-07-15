@@ -1,0 +1,19 @@
+{
+  "verbs": [
+    {
+      "invocation": "ok",
+      "execution": ":print_path",
+      "leave_broot": true,
+      "from_shell": true,
+      "key": "enter",
+      "apply_to": "file"
+    },
+    {
+      "invocation": "ok",
+      "execution": ":print_path",
+      "leave_broot": true,
+      "key": "alt-enter",
+      "apply_to": "any"
+    }
+  ]
+}
