@@ -113,7 +113,9 @@ echo ""
 
 # Check 6: Auto-rewrite hook
 echo "6. Checking auto-rewrite hook (optional but recommended)..."
-if [ -f "$HOME/.claude/hooks/rtk-rewrite.sh" ]; then
+if [ -f "$HOME/.claude/settings.json" ] && grep -Fq "rtk hook claude" "$HOME/.claude/settings.json"; then
+    echo -e "   ${GREEN}✅${NC} Native RTK hook enabled in settings.json"
+elif [ -f "$HOME/.claude/hooks/rtk-rewrite.sh" ]; then
     echo -e "   ${GREEN}✅${NC} Hook script installed"
     if [ -f "$HOME/.claude/settings.json" ] && grep -q "rtk-rewrite.sh" "$HOME/.claude/settings.json"; then
         echo -e "   ${GREEN}✅${NC} Hook enabled in settings.json"
