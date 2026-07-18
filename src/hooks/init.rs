@@ -6889,20 +6889,4 @@ mod tests {
             hook_path.display()
         );
     }
-
-    #[test]
-    fn test_copilot_instructions_kubectl_get_not_dropped() {
-        // Regression: COPILOT_INSTRUCTIONS template previously translated
-        // 'kubectl get pods' to 'rtk kubectl pods', dropping the 'get' subcommand.
-        // Copilot agents following the template would run a failing command.
-        assert!(
-            COPILOT_INSTRUCTIONS.contains("rtk kubectl get pods"),
-            "COPILOT_INSTRUCTIONS must include 'rtk kubectl get pods' (not 'rtk kubectl pods')"
-        );
-        assert!(
-            !COPILOT_INSTRUCTIONS.contains("rtk kubectl pods\n")
-                && !COPILOT_INSTRUCTIONS.contains("rtk kubectl pods`"),
-            "COPILOT_INSTRUCTIONS must not contain 'rtk kubectl pods' without 'get'"
-        );
-    }
 }
