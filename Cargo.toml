@@ -28,6 +28,7 @@ toml = "0.8"
 chrono = "0.4"
 tempfile = "3"
 sha2 = "0.10"
+base64 = "0.22"
 ureq = "2"
 getrandom = "0.4"
 flate2 = "1.0"
@@ -72,3 +73,13 @@ unsafe_code = "deny"
 warnings = "deny"
 
 [workspace]
+
+[[bin]]
+name = "rtk_nu"
+path = "src/rtk_nu_main.rs"
+
+[[bin]]
+name = "rtk_nu_test_fixture"
+path = "tests/fixtures/rtk_nu_test_fixture.rs"
+test = false
+bench = false

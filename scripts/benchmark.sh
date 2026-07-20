@@ -12,6 +12,10 @@ else
 fi
 BENCH_DIR="$(pwd)/scripts/benchmark"
 RTK_ROOT="$(pwd)"
+FIXTURE_DIR="$RTK_ROOT/scripts/benchmark-fixtures/http"
+FIXTURE_PORT="${RTK_BENCHMARK_HTTP_PORT:-18765}"
+FIXTURE_URL="http://127.0.0.1:${FIXTURE_PORT}"
+FIXTURE_SERVER_PID=""
 
 if [ -z "$CI" ]; then
   rm -rf "$BENCH_DIR"
@@ -21,6 +25,43 @@ fi
 safe_name() {
   echo "$1" | tr ' /' '_-' | tr -cd 'a-zA-Z0-9_-'
 }
+
+stop_fixture_server() {
+  if [ -n "$FIXTURE_SERVER_PID" ]; then
+    kill "$FIXTURE_SERVER_PID" 2>/dev/null || true
+    wait "$FIXTURE_SERVER_PID" 2>/dev/null || true
+  fi
+}
+
+start_fixture_server() {
+  if [ ! -f "$FIXTURE_DIR/payload.json" ] || [ ! -f "$FIXTURE_DIR/robots.txt" ]; then
+    echo "Error: missing benchmark HTTP fixtures under $FIXTURE_DIR"
+    exit 1
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "Error: python3 is required to serve deterministic benchmark fixtures"
+    exit 1
+  fi
+
+  python3 -m http.server "$FIXTURE_PORT" --bind 127.0.0.1 --directory "$FIXTURE_DIR" \
+    >/dev/null 2>&1 &
+  FIXTURE_SERVER_PID=$!
+
+  for _ in 1 2 3 4 5; do
+    if command -v curl >/dev/null 2>&1 && curl -fsS "$FIXTURE_URL/payload.json" >/dev/null 2>&1; then
+      return
+    fi
+    if command -v wget >/dev/null 2>&1 && wget -qO- "$FIXTURE_URL/payload.json" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 1
+  done
+
+  echo "Error: deterministic benchmark fixture server did not become ready"
+  exit 1
+}
+
+trap stop_fixture_server EXIT INT TERM
 
 count_tokens() {
   local input="$1"
@@ -344,18 +385,17 @@ bench "wc" "wc Cargo.toml src/main.rs" "$RTK wc Cargo.toml src/main.rs"
 # ===================
 # curl
 # ===================
-section "curl"
-if command -v curl &> /dev/null; then
-  bench "curl json" "curl -s https://mockhttp.org/json" "$RTK curl https://mockhttp.org/json"
-  bench "curl text" "curl -s https://mockhttp.org/robots.txt" "$RTK curl https://mockhttp.org/robots.txt"
-fi
-
-# ===================
-# wget
-# ===================
-if command -v wget &> /dev/null; then
-  section "wget"
-  bench "wget" "wget -qO- https://mockhttp.org/json" "$RTK wget https://mockhttp.org/json"
+if command -v curl &> /dev/null || command -v wget &> /dev/null; then
+  start_fixture_server
+  if command -v curl &> /dev/null; then
+    section "curl"
+    bench "curl json" "curl -fsS $FIXTURE_URL/payload.json" "$RTK curl $FIXTURE_URL/payload.json"
+    bench "curl text" "curl -fsS $FIXTURE_URL/robots.txt" "$RTK curl $FIXTURE_URL/robots.txt"
+  fi
+  if command -v wget &> /dev/null; then
+    section "wget"
+    bench "wget" "wget -qO- $FIXTURE_URL/payload.json" "$RTK wget $FIXTURE_URL/payload.json"
+  fi
   rm -f json 2>/dev/null
 fi
 

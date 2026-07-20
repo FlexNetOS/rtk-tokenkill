@@ -899,6 +899,14 @@ fn merge_diag_counts(error_count: usize, warnings: usize, json: &JsonDiagnostics
 }
 
 fn cargo_build_success_line(compiled: usize, finished: Option<&str>, label: &str) -> String {
+    // A no-op Cargo invocation already emits one concise `Finished` line. Adding
+    // an RTK heading would make that successful result larger than the original
+    // command output, so preserve the compact native completion line instead.
+    if compiled == 0 {
+        if let Some(finished) = finished {
+            return format!("{}\n", finished);
+        }
+    }
     match finished {
         Some(f) => format!("cargo {} ({} crates compiled)\n{}\n", label, compiled, f),
         None => format!("cargo {} ({} crates compiled)\n", label, compiled),
@@ -2319,6 +2327,18 @@ error: test run failed
         assert!(result.contains("3 crates compiled"), "got: {}", result);
         assert!(result.contains("Finished"), "got: {}", result);
         assert!(!result.contains("Compiling"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_cargo_build_stream_noop_keeps_native_completion_line() {
+        let input = "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s\n";
+        let mut f = BlockStreamFilter::new(CargoBuildHandler::with_label("build"));
+        let result = run_block_filter(&mut f, input, 0);
+        assert_eq!(
+            result,
+            "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s\n"
+        );
+        assert!(result.len() < input.len(), "must never expand no-op output");
     }
 
     #[test]
