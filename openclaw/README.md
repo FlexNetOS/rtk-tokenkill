@@ -2,7 +2,7 @@
 
 Transparently rewrites shell commands executed via OpenClaw's `exec` tool to their RTK equivalents, achieving 60-90% LLM token savings.
 
-This is the OpenClaw equivalent of the Claude Code hooks in `hooks/rtk-rewrite.sh`.
+This is the OpenClaw equivalent of the native Claude Code dispatcher, `rtk hook claude`.
 
 ## How it works
 

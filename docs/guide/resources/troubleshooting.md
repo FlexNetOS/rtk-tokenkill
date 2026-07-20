@@ -107,7 +107,7 @@ rtk --version
 
 **Symptom:** `rtk init -g` shows "Falling back to --claude-md mode" on Windows.
 
-**Cause:** The auto-rewrite hook (`rtk-rewrite.sh`) requires a Unix shell. Native Windows doesn't have one.
+**Cause:** the native Claude dispatcher is unavailable in the active RTK installation.
 
 **Fix:** Use [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) for full hook support:
 ```bash

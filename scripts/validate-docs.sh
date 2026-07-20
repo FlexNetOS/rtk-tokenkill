@@ -23,19 +23,13 @@ for cmd in "${PYTHON_GO_CMDS[@]}"; do
 done
 echo "✅ Python/Go commands: documented in README.md"
 
-# 4. Hooks cohérents avec doc
-HOOK_FILE=".claude/hooks/rtk-rewrite.sh"
-if [ -f "$HOOK_FILE" ]; then
-  echo "🪝 Checking hook rewrites..."
-  for cmd in "${PYTHON_GO_CMDS[@]}"; do
-    if ! grep -q "$cmd" "$HOOK_FILE"; then
-      echo "⚠️  Hook may not rewrite $cmd (verify manually)"
-    fi
-  done
-  echo "✅ Hook file exists and mentions Python/Go commands"
-else
-  echo "⚠️  Hook file not found: $HOOK_FILE"
+# 4. Native dispatcher owns hook routing; legacy shell payloads are forbidden.
+if [ -e ".claude/hooks/rtk-rewrite.sh" ]; then
+  echo "❌ Retired Claude shell hook is present"
+  exit 1
 fi
+grep -q 'rtk hook claude' docs/contributing/TECHNICAL.md
+echo "✅ Native RTK dispatcher documented; no legacy shell hook"
 
 echo ""
 echo "✅ Documentation validation passed"
