@@ -7,6 +7,7 @@ use std::process::Command;
 
 fn rtk(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_rtk"))
+        .env("LANG", "C")
         .args(args)
         .output()
         .expect("rtk")
