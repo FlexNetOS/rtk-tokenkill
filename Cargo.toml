@@ -77,3 +77,9 @@ warnings = "deny"
 [[bin]]
 name = "rtk_nu"
 path = "src/rtk_nu_main.rs"
+
+[[bin]]
+name = "rtk_nu_test_fixture"
+path = "tests/fixtures/rtk_nu_test_fixture.rs"
+test = false
+bench = false

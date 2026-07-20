@@ -1,11 +1,26 @@
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde_json::Value;
+use std::env;
+use std::path::Path;
 use std::process::Command;
 
-fn invoke(format: &str, script: &str) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_rtk_nu"))
-        .args(["--format", format, "--", "/bin/sh", "-c", script])
+fn invoke(format: &str, fixture_mode: &str) -> std::process::Output {
+    let adapter = env!("CARGO_BIN_EXE_rtk_nu");
+    let adapter_dir = Path::new(adapter)
+        .parent()
+        .expect("adapter binary parent directory");
+    let mut path_entries = vec![adapter_dir.to_path_buf()];
+    if let Some(existing_path) = env::var_os("PATH") {
+        path_entries.extend(env::split_paths(&existing_path));
+    }
+    let path = env::join_paths(path_entries).expect("construct test PATH");
+
+    Command::new(adapter)
+        .env("PATH", path)
+        .args(["--format", format, "--"])
+        .arg(env!("CARGO_BIN_EXE_rtk_nu_test_fixture"))
+        .arg(fixture_mode)
         .output()
         .expect("run rtk_nu")
 }
@@ -26,7 +41,7 @@ fn captured_stream_bytes(envelope: &Value, stream: &str) -> Vec<u8> {
 
 #[test]
 fn preserves_binary_bytes_stream_offsets_and_nonzero_exit() {
-    let output = invoke("json", "printf '\\377A'; printf '\\000B' >&2; exit 7");
+    let output = invoke("json", "binary-failure");
     assert_eq!(output.status.code(), Some(7));
     let envelope: Value = serde_json::from_slice(&output.stdout).expect("JSON envelope");
     assert_eq!(envelope["schema_version"], "flexnetos.rtk_nu.envelope.v1");
@@ -47,10 +62,7 @@ fn preserves_binary_bytes_stream_offsets_and_nonzero_exit() {
 
 #[test]
 fn jsonl_has_monotonic_frames_and_completion_after_partial_lines() {
-    let output = invoke(
-        "jsonl",
-        "printf 'left'; printf 'problem' >&2; printf 'right'",
-    );
+    let output = invoke("jsonl", "partial");
     assert!(output.status.success());
     let records = std::str::from_utf8(&output.stdout)
         .expect("JSONL UTF-8")
@@ -75,7 +87,7 @@ fn jsonl_has_monotonic_frames_and_completion_after_partial_lines() {
 
 #[test]
 fn nuon_output_uses_nuon_records_for_from_nuon_boundaries() {
-    let output = invoke("nuon", "printf 'nuon'");
+    let output = invoke("nuon", "nuon");
     assert!(output.status.success());
     let rendered = std::str::from_utf8(&output.stdout).expect("Nuon UTF-8");
     assert!(rendered.starts_with("{schema_version:"));

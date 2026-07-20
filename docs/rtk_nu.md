@@ -3,7 +3,10 @@
 `rtk_nu` is the separately packaged FlexNetOS adapter for a legacy command
 whose stdout and stderr must reach a Nushell/CodeDB ingestion path without
 losing bytes. It is deliberately not a mode of `rtk`, and it never runs a Nu
-plugin or accepts an already-typed Nu pipeline.
+plugin or accepts an already-typed Nu pipeline. The installed `rtk` frontdoor
+must be on `PATH`: the adapter delegates process launch to `rtk proxy`, the
+repository-owned raw-command execution boundary, then captures the relayed
+stdout and stderr byte streams before it performs any envelope serialization.
 
 ```bash
 rtk_nu --format jsonl -- command --with-flags

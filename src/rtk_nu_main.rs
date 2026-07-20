@@ -281,9 +281,14 @@ fn run(cli: Cli) -> Result<i32> {
     };
 
     let (sender, receiver) = mpsc::channel();
-    let mut command = Command::new(&cli.command[0]);
+    // `rtk proxy` is the repository-owned raw-command frontdoor.  Keeping the
+    // executable literal here makes the authority boundary explicit: this
+    // adapter captures byte streams, while `rtk` owns legacy-command launch
+    // policy and PATHEXT-aware resolution on every supported platform.
+    let mut command = Command::new("rtk");
     command
-        .args(&cli.command[1..])
+        .arg("proxy")
+        .args(&cli.command)
         .current_dir(&cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

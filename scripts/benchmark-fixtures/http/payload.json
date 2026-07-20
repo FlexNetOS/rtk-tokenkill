@@ -1,0 +1,21 @@
+{
+  "status": "ok",
+  "fixture": "rtk-benchmark-http-v1",
+  "meta": {
+    "source": "repository-owned",
+    "deterministic": true,
+    "content_type": "application/json"
+  },
+  "items": [
+    {
+      "id": 1,
+      "name": "raw-byte-safe",
+      "enabled": true
+    },
+    {
+      "id": 2,
+      "name": "stable-benchmark-input",
+      "enabled": true
+    }
+  ]
+}
