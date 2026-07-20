@@ -47,12 +47,6 @@ brew install rtk-ai/tap/rtk
 cargo install --git https://github.com/rtk-ai/rtk --branch master rtk
 ```
 
-To follow the development branch:
-
-```bash
-cargo install --git https://github.com/rtk-ai/rtk rtk
-```
-
 ## Pre-built binaries (Windows, Linux, macOS)
 
 Download from [GitHub releases](https://github.com/rtk-ai/rtk/releases):
