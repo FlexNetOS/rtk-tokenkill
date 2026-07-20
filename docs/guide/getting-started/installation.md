@@ -44,6 +44,14 @@ brew install rtk-ai/tap/rtk
 :::
 
 ```bash
+cargo install --git https://github.com/rtk-ai/rtk --branch master rtk
+```
+
+`master` always tracks the latest stable release. Without `--branch master`, Cargo builds the repository default branch (`develop`), which carries unreleased code and reports a lower version number than the release it is built from.
+
+To follow the development branch on purpose:
+
+```bash
 cargo install --git https://github.com/rtk-ai/rtk rtk
 ```
 
