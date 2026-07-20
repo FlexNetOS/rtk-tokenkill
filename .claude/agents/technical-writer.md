@@ -186,22 +186,20 @@ RTK integrates with Claude Code via bash hooks for transparent command rewriting
 ## How It Works
 
 1. User types command in Claude Code: `git status`
-2. Hook (`rtk-rewrite.sh`) intercepts command
+2. Native dispatcher (`rtk hook claude`) intercepts command
 3. Rewrites to: `rtk git status`
 4. RTK applies filter, returns condensed output
 5. Claude sees token-optimized result (80% savings)
 
-## Hook Files
+## Hook Dispatcher
 
-- `.claude/hooks/rtk-rewrite.sh` - Command rewriting (DO NOT MODIFY)
-- `.claude/hooks/rtk-suggest.sh` - Suggestion when filter available
+- `rtk hook claude` - Native Rust command rewriting dispatcher
 
 ## Verification
 
-**Check hooks are active**:
+**Check the dispatcher is active**:
 ```bash
-ls -la .claude/hooks/*.sh
-# Should show -rwxr-xr-x (executable)
+rtk hook claude --help
 ```
 
 **Test hook integration** (in Claude Code session):

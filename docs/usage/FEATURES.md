@@ -1191,7 +1191,7 @@ Claude Code "git status"
 settings.json -> PreToolUse hook
     |
     v
-rtk-rewrite.sh (bash)
+rtk hook claude (native Rust dispatcher)
     |
     v
 rtk rewrite "git status"  ->  "rtk git status"
@@ -1225,7 +1225,7 @@ rtk init -g --uninstall         # Desinstaller
 
 | Fichier | Description |
 |---------|-------------|
-| `~/.claude/hooks/rtk-rewrite.sh` | Script hook (delegue a `rtk rewrite`) |
+| `rtk hook claude` | Native hook dispatcher (delegue a `rtk rewrite`) |
 | `~/.claude/RTK.md` | Instructions minimales pour le LLM |
 | `~/.claude/settings.json` | Enregistrement du hook PreToolUse |
 

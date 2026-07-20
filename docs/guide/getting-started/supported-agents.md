@@ -211,7 +211,7 @@ Rules file integrations (Cline, Windsurf, Codex, Kilo Code, Antigravity) rely on
 
 ## Windows support
 
-The shell hook (`rtk-rewrite.sh`) requires a Unix shell. On native Windows:
+The native RTK dispatcher must be available on PATH. On native Windows:
 
 - `rtk init -g` automatically falls back to **CLAUDE.md injection mode** (prompt-level instructions)
 - Filters work normally (`rtk cargo test`, `rtk git status`)

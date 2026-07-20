@@ -18,7 +18,7 @@ Comprehensive security analysis for RTK CLI tool, focusing on **command injectio
 RTK faces unique security challenges as a CLI proxy that:
 1. **Executes shell commands** based on user input
 2. **Parses untrusted command output** (git, cargo, gh, etc.)
-3. **Integrates with Claude Code hooks** (rtk-rewrite.sh, rtk-suggest.sh)
+3. **Integrates with the native Claude Code dispatcher** (`rtk hook claude`)
 4. **Routes commands transparently** (command injection vectors)
 
 ### Threat Categories
@@ -130,14 +130,14 @@ fn filter_git_log(input: &str) -> Result<String> {
 ```bash
 # 🔴 CRITICAL: Hook not checking source
 #!/bin/bash
-# rtk-rewrite.sh
+# Native dispatcher boundary
 
 # Execute command without validation
 eval "$CLAUDE_CODE_HOOK_BASH_TEMPLATE" # DANGEROUS!
 
 # ✅ SAFE: Validate hook environment
 #!/bin/bash
-# rtk-rewrite.sh
+# Native dispatcher boundary
 
 # Verify running in Claude Code context
 if [ -z "$CLAUDE_CODE_HOOK_BASH_TEMPLATE" ]; then
@@ -263,15 +263,15 @@ rg "\.join\(\" \"\)" --type rust src/
 
 ### Hook Security (🟡 High)
 
-- [ ] **Permission checks**: Verify hooks are executable (`-rwxr-xr-x`)
-- [ ] **Source validation**: Only execute hooks from `.claude/hooks/`
+- [ ] **Command checks**: Verify `rtk hook claude` resolves from the approved RTK installation
+- [ ] **Source validation**: Do not execute repository-local hook scripts
 - [ ] **Environment validation**: Check `$CLAUDE_CODE_HOOK_BASH_TEMPLATE`
 - [ ] **No dynamic evaluation**: No `eval` or `source` of untrusted files
 
 **Hook security checklist**:
 ```bash
 #!/bin/bash
-# rtk-rewrite.sh
+# Native dispatcher boundary
 
 # 1. Verify Claude Code context
 if [ -z "$CLAUDE_CODE_HOOK_BASH_TEMPLATE" ]; then
@@ -442,7 +442,7 @@ rg "\[.*\.\.\.\]" --type rust src/
 rg "\[.*\.\.]" --type rust src/
 
 # Hook security
-rg "eval|source" --type bash .claude/hooks/
+rg "eval|source" src/hooks/
 ```
 
 ## Incident Response

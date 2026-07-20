@@ -341,9 +341,10 @@ Before committing filter changes:
 
 ## Continuous Performance Monitoring
 
-### Pre-Commit Hook
+### CI Performance Check
 
-Add to `.claude/hooks/bash/pre-commit-performance.sh`:
+Run this as an explicit CI or local verification command; do not install a
+repository-local Claude hook script:
 
 ```bash
 #!/bin/bash

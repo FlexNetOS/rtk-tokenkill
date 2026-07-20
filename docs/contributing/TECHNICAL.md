@@ -70,9 +70,9 @@ This is the full lifecycle of a command through RTK, from LLM agent to filtered 
 
 The user runs `rtk init` to set up hooks for their LLM agent. This:
 
-1. Writes a thin shell hook script (e.g., `~/.claude/hooks/rtk-rewrite.sh`)
-2. Stores its SHA-256 hash for integrity verification
-3. Patches the agent's settings file (e.g., `settings.json`) to register the hook
+1. Registers the native `rtk hook claude` command in the agent settings
+2. Removes any previously installed legacy shell-hook payload and its hash
+3. Preserves unrelated agent settings while registering the dispatcher
 4. Writes RTK awareness instructions (e.g., `RTK.md`) for prompt-level guidance
 
 RTK supports 7 agents, each with its own installation mode. The hook scripts are embedded in the binary and written at install time.
@@ -107,9 +107,9 @@ Traced step by step for `cargo fmt --all && cargo test 2>&1 | tail -20`:
 ```
 LLM Agent: "cargo fmt --all && cargo test 2>&1 | tail -20"
   |
-  |  Hook shell (hooks/claude/rtk-rewrite.sh)
-  |  Reads JSON from agent, extracts command, calls `rtk rewrite "$CMD"`
-  |  On failure (jq missing, rtk missing, old version): exit 0 (passthrough)
+  |  Native dispatcher (`rtk hook claude`)
+  |  Reads JSON from the agent and delegates command rewriting to Rust
+  |  Legacy shell payloads are removed during migration
   |
   v
 rewrite_cmd::run(cmd)                              [src/hooks/rewrite_cmd.rs]
