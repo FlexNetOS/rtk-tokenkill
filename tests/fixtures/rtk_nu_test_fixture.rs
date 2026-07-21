@@ -29,6 +29,30 @@ fn main() {
             stdout.write_all(b"nuon").expect("write stdout");
             stdout.flush().expect("flush stdout");
         }
+        "signal-abort" => {
+            stdout.write_all(b"pre-signal-out").expect("write stdout");
+            stdout.flush().expect("flush stdout");
+            stderr.write_all(b"pre-signal-err").expect("write stderr");
+            stderr.flush().expect("flush stderr");
+            std::process::abort();
+        }
+        "large-stream" => {
+            let pattern: Vec<u8> = (0..65_536u32).map(|i| (i % 251) as u8).collect();
+            stdout.write_all(&pattern).expect("write large stdout");
+            stdout.flush().expect("flush large stdout");
+            stderr.write_all(b"large-marker").expect("write stderr");
+            stderr.flush().expect("flush stderr");
+        }
+        "parser-garbage" => {
+            stdout
+                .write_all(b"{not json\xff\xfe")
+                .expect("write garbage stdout");
+            stdout.flush().expect("flush garbage stdout");
+        }
+        "compact" => {
+            stdout.write_all(b"compact-source").expect("write stdout");
+            stdout.flush().expect("flush stdout");
+        }
         other => panic!("unknown fixture mode: {other}"),
     }
 }

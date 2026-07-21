@@ -2623,6 +2623,25 @@ fn run_cli() -> Result<i32> {
                 &full_output,
             );
 
+            // A faithful proxy propagates the child's fatal signal instead of
+            // laundering it into `128 + sig` (indistinguishable from a real
+            // exit code) plus a stderr diagnostic that would corrupt captured
+            // byte streams; envelope capture (rtk_nu) depends on this.
+            #[cfg(unix)]
+            #[allow(unsafe_code)]
+            {
+                use std::os::unix::process::ExitStatusExt;
+                if status.code().is_none() {
+                    if let Some(sig) = status.signal() {
+                        // nosemgrep: unsafe-block
+                        unsafe {
+                            libc::signal(sig, libc::SIG_DFL);
+                            libc::raise(sig);
+                        }
+                    }
+                }
+            }
+
             core::utils::exit_code_from_status(&status, &cmd_name)
         }
 
