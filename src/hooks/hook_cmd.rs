@@ -303,25 +303,14 @@ fn sanitize_log_field(s: &str) -> String {
 }
 
 fn audit_log_inner(action: &str, original: &str, rewritten: &str) -> Option<()> {
-    let home = dirs::home_dir()?;
-    let dir = home.join(".local").join("share").join("rtk");
-    std::fs::create_dir_all(&dir).ok()?;
-    let path = dir.join("hook-audit.log");
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .ok()?;
     let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S");
-    writeln!(
-        file,
+    super::audit::append(&format!(
         "{} | {} | {} | {}",
         ts,
         action,
         sanitize_log_field(original),
         sanitize_log_field(rewritten)
-    )
-    .ok()
+    ))
 }
 
 // ── Claude Code native hook ────────────────────────────────────
@@ -794,6 +783,74 @@ fn run_droid_inner_with_rules(
     let cmd = droid_execute_command(&v)?;
     let verdict = permissions::check_command_with_rules(cmd, deny_rules, ask_rules, allow_rules);
     droid_response_from_decision(&v, cmd, decide_from_verdict(cmd, verdict)).map(|o| o.to_string())
+}
+
+pub(crate) fn payload_compatibility_probe(agent: &str) -> bool {
+    let command = "git status";
+    match agent {
+        "claude" => {
+            let payload = json!({
+                "hook_event_name": PRE_TOOL_USE_KEY,
+                "tool_name": "Bash",
+                "tool_input": { "command": command }
+            });
+            !matches!(process_claude_payload(&payload), PayloadAction::Ignore)
+        }
+        "codex" => {
+            let payload = json!({
+                "hook_event_name": PRE_TOOL_USE_KEY,
+                "tool_name": "Bash",
+                "tool_input": { "command": command, "timeout_ms": 1000 }
+            });
+            match process_codex_payload_with_decision(
+                &payload,
+                HookDecision::AllowRewrite("rtk git status".to_string()),
+            ) {
+                PayloadAction::Rewrite { output, .. } => {
+                    output.pointer("/hookSpecificOutput/permissionDecision")
+                        == Some(&json!("allow"))
+                        && output.pointer("/hookSpecificOutput/updatedInput/command")
+                            == Some(&json!("rtk git status"))
+                        && output.pointer("/hookSpecificOutput/updatedInput/timeout_ms")
+                            == Some(&json!(1000))
+                }
+                _ => false,
+            }
+        }
+        "cursor" => serde_json::from_str::<Value>(&cursor_allow("rtk git status"))
+            .ok()
+            .is_some_and(|output| {
+                output.get("permission") == Some(&json!("allow"))
+                    && output.pointer("/updated_input/command") == Some(&json!("rtk git status"))
+            }),
+        "gemini" => serde_json::from_str::<Value>(&gemini_json("allow", Some("rtk git status")))
+            .ok()
+            .is_some_and(|output| {
+                output.get("decision") == Some(&json!("allow"))
+                    && output.pointer("/hookSpecificOutput/tool_input/command")
+                        == Some(&json!("rtk git status"))
+            }),
+        "copilot" => {
+            let vscode = json!({
+                "tool_name": "Bash",
+                "tool_input": { "command": command }
+            });
+            let cli = json!({
+                "toolName": "bash",
+                "toolArgs": serde_json::to_string(&json!({ "command": command })).unwrap_or_default()
+            });
+            matches!(detect_format(&vscode), HookFormat::VsCode { .. })
+                && matches!(detect_format(&cli), HookFormat::CopilotCli { .. })
+        }
+        "droid" => {
+            let payload = json!({
+                "tool_name": "Execute",
+                "tool_input": { "command": command }
+            });
+            droid_execute_command(&payload) == Some(command)
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]

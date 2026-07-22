@@ -385,7 +385,28 @@ enum Commands {
         #[arg(long)]
         uninstall: bool,
 
-        /// Target Codex CLI (uses AGENTS.md + RTK.md, no Claude hook patching)
+        /// Install every registered native hook, plugin, and prompt-only integration
+        #[arg(
+            long = "all-agents",
+            conflicts_with_all = [
+                "global",
+                "opencode",
+                "gemini",
+                "agent",
+                "show",
+                "claude_md",
+                "hook_only",
+                "auto_patch",
+                "no_patch",
+                "trust_filters",
+                "no_trust_filters",
+                "codex",
+                "copilot"
+            ]
+        )]
+        all_agents: bool,
+
+        /// Target Codex CLI (AGENTS.md + RTK.md + native PreToolUse hook)
         #[arg(long)]
         codex: bool,
 
@@ -671,11 +692,17 @@ enum Commands {
     /// Verify hook integrity and run TOML filter inline tests
     Verify {
         /// Run tests only for this filter name
-        #[arg(long)]
+        #[arg(long, conflicts_with = "all_agents")]
         filter: Option<String>,
         /// Fail if any filter has no inline tests (CI mode)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "all_agents")]
         require_all: bool,
+        /// Validate every registered agent integration
+        #[arg(long = "all-agents")]
+        all_agents: bool,
+        /// All-agent report format
+        #[arg(long, value_parser = ["text", "json"], requires = "all_agents")]
+        format: Option<String>,
     },
 
     /// Ruff linter/formatter with compact output
@@ -2006,6 +2033,7 @@ fn run_cli() -> Result<i32> {
             trust_filters,
             no_trust_filters,
             uninstall,
+            all_agents,
             codex,
             copilot,
             dry_run,
@@ -2014,7 +2042,9 @@ fn run_cli() -> Result<i32> {
                 verbose: cli.verbose,
                 dry_run,
             };
-            if show {
+            if all_agents {
+                hooks::init::run_all_agents(uninstall, ctx)?;
+            } else if show {
                 hooks::init::show_config(codex)?;
             } else if uninstall && copilot {
                 if global {
@@ -2691,16 +2721,25 @@ fn run_cli() -> Result<i32> {
         Commands::Verify {
             filter,
             require_all,
+            all_agents,
+            format,
         } => {
-            if filter.is_some() {
+            if all_agents {
+                if hooks::verify_cmd::run_all_agents(format.as_deref().unwrap_or("text"))? {
+                    0
+                } else {
+                    1
+                }
+            } else if filter.is_some() {
                 // Filter-specific mode: run only that filter's tests
                 hooks::verify_cmd::run(filter, require_all)?;
+                0
             } else {
                 // Default or --require-all: always run integrity check first
                 hooks::integrity::run_verify(cli.verbose)?;
                 hooks::verify_cmd::run(None, require_all)?;
+                0
             }
-            0
         }
     };
 
@@ -2924,6 +2963,61 @@ mod tests {
             }
             _ => panic!("Expected Init command"),
         }
+    }
+
+    #[test]
+    fn test_try_parse_init_all_agents_install_and_uninstall() {
+        for args in [
+            vec!["rtk", "init", "--all-agents"],
+            vec!["rtk", "init", "--all-agents", "--uninstall"],
+        ] {
+            let expect_uninstall = args.contains(&"--uninstall");
+            let cli = Cli::try_parse_from(args).unwrap();
+            match cli.command {
+                Commands::Init {
+                    all_agents,
+                    uninstall,
+                    ..
+                } => {
+                    assert!(all_agents);
+                    assert_eq!(uninstall, expect_uninstall);
+                }
+                _ => panic!("Expected Init command"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_init_all_agents_rejects_individual_target_flags() {
+        for extra in ["--codex", "--gemini", "--copilot", "--global"] {
+            let result = Cli::try_parse_from(["rtk", "init", "--all-agents", extra]);
+            assert!(result.is_err(), "must reject {extra}");
+        }
+    }
+
+    #[test]
+    fn test_try_parse_verify_all_agents_formats() {
+        for format in ["text", "json"] {
+            let cli =
+                Cli::try_parse_from(["rtk", "verify", "--all-agents", "--format", format]).unwrap();
+            match cli.command {
+                Commands::Verify {
+                    all_agents,
+                    format: parsed_format,
+                    ..
+                } => {
+                    assert!(all_agents);
+                    assert_eq!(parsed_format.as_deref(), Some(format));
+                }
+                _ => panic!("Expected Verify command"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_verify_format_requires_all_agents() {
+        let result = Cli::try_parse_from(["rtk", "verify", "--format", "json"]);
+        assert!(result.is_err());
     }
 
     #[test]
