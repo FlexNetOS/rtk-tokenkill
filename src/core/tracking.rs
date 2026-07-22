@@ -31,10 +31,10 @@
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OpenFlags};
 use serde::Serialize;
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 // ── Project path helpers ── // added: project-scoped tracking support
@@ -224,6 +224,23 @@ pub struct MonthStats {
 type CommandStats = (String, usize, usize, f64, u64);
 
 impl Tracker {
+    /// Open the existing tracking database without creating, migrating, or
+    /// otherwise mutating it. Returns `None` when no database exists yet.
+    pub fn open_read_only() -> Result<Option<Self>> {
+        let db_path = get_db_path()?;
+        if !db_path.is_file() {
+            return Ok(None);
+        }
+        Self::open_read_only_at(&db_path).map(Some)
+    }
+
+    fn open_read_only_at(db_path: &Path) -> Result<Self> {
+        let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("Failed to open tracking database: {}", db_path.display()))?;
+        conn.busy_timeout(std::time::Duration::from_secs(2))?;
+        Ok(Self { conn })
+    }
+
     /// Create a new tracker instance.
     ///
     /// Opens or creates the SQLite database at the platform-specific location.
@@ -1442,6 +1459,47 @@ mod tests {
 
         let single = vec![OsString::from("log")];
         assert_eq!(args_display(&single), "log");
+    }
+
+    #[test]
+    fn test_open_read_only_never_mutates_tracking_database() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("tracking.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE commands (
+                id INTEGER PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                original_cmd TEXT NOT NULL,
+                rtk_cmd TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                saved_tokens INTEGER NOT NULL,
+                savings_pct REAL NOT NULL,
+                exec_time_ms INTEGER DEFAULT 0,
+                project_path TEXT DEFAULT ''
+            );
+            CREATE TABLE parse_failures (
+                id INTEGER PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                raw_command TEXT NOT NULL,
+                error_message TEXT NOT NULL,
+                fallback_succeeded INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .unwrap();
+        drop(conn);
+
+        let tracker = Tracker::open_read_only_at(&path).unwrap();
+        assert_eq!(tracker.get_summary().unwrap().total_commands, 0);
+        let write = tracker.conn.execute(
+            "INSERT INTO commands (
+                timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens,
+                saved_tokens, savings_pct, exec_time_ms, project_path
+             ) VALUES ('now', 'git status', 'rtk git status', 10, 5, 5, 50, 1, '')",
+            [],
+        );
+        assert!(write.is_err(), "read-only connection accepted a write");
     }
 
     // 3. Tracker::record + get_recent — round-trip DB

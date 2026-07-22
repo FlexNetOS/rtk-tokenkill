@@ -274,6 +274,9 @@ rtk discover                    # Find missed savings opportunities
 rtk discover --all --since 7    # All projects, last 7 days
 
 rtk session                     # Show RTK adoption across recent sessions
+
+rtk dashboard                   # Five-view local terminal dashboard
+RTK_SERVER_TOKEN=... rtk server # Authenticated loopback read-only API
 ```
 
 ## Global Flags
@@ -431,6 +434,7 @@ brew uninstall rtk           # If installed via Homebrew
 - **[ARCHITECTURE.md](docs/contributing/ARCHITECTURE.md)** — system design and technical decisions
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — contribution guide
 - **[SECURITY.md](SECURITY.md)** — security policy
+- **[Server and Dashboard](docs/usage/SERVER_DASHBOARD.md)** — authenticated API, TUI, redaction, and optional ICM health
 
 ## Privacy & Telemetry
 

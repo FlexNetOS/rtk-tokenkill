@@ -1,10 +1,14 @@
 mod analytics;
 mod cmds;
 mod core;
+mod dashboard;
 mod discover;
 mod hooks;
+mod icm_bridge;
 mod learn;
+mod observability;
 mod parser;
+mod server;
 
 // Re-export command modules for routing
 use cmds::cloud::{aws_cmd, container, curl_cmd, psql_cmd, wget_cmd};
@@ -703,6 +707,27 @@ enum Commands {
         /// All-agent report format
         #[arg(long, value_parser = ["text", "json"], requires = "all_agents")]
         format: Option<String>,
+    },
+
+    /// Serve authenticated read-only RTK observability endpoints
+    Server {
+        /// Loopback address to bind
+        #[arg(long, default_value = "127.0.0.1:8745")]
+        bind: String,
+        /// Optional localhost ICM HTTP API base URL
+        #[arg(long)]
+        icm_url: Option<String>,
+    },
+
+    /// Open the five-view RTK terminal dashboard
+    #[command(alias = "tui")]
+    Dashboard {
+        /// Optional localhost `rtk server` base URL; local state is the default
+        #[arg(long)]
+        server: Option<String>,
+        /// Optional localhost ICM HTTP API base URL
+        #[arg(long)]
+        icm_url: Option<String>,
     },
 
     /// Ruff linter/formatter with compact output
@@ -2741,6 +2766,16 @@ fn run_cli() -> Result<i32> {
                 0
             }
         }
+
+        Commands::Server { bind, icm_url } => {
+            server::run(&bind, icm_url.as_deref())?;
+            0
+        }
+
+        Commands::Dashboard { server, icm_url } => {
+            dashboard::run(server.as_deref(), icm_url.as_deref())?;
+            0
+        }
     };
 
     Ok(code)
@@ -3018,6 +3053,44 @@ mod tests {
     fn test_verify_format_requires_all_agents() {
         let result = Cli::try_parse_from(["rtk", "verify", "--format", "json"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_server_and_dashboard_public_interfaces_parse() {
+        use clap::CommandFactory;
+
+        let server = Cli::try_parse_from([
+            "rtk",
+            "server",
+            "--bind",
+            "127.0.0.1:9000",
+            "--icm-url",
+            "http://127.0.0.1:8746",
+        ])
+        .unwrap();
+        match server.command {
+            Commands::Server { bind, icm_url } => {
+                assert_eq!(bind, "127.0.0.1:9000");
+                assert_eq!(icm_url.as_deref(), Some("http://127.0.0.1:8746"));
+            }
+            _ => panic!("Expected Server command"),
+        }
+
+        for name in ["dashboard", "tui"] {
+            let dashboard =
+                Cli::try_parse_from(["rtk", name, "--server", "http://[::1]:8745"]).unwrap();
+            match dashboard.command {
+                Commands::Dashboard { server, .. } => {
+                    assert_eq!(server.as_deref(), Some("http://[::1]:8745"));
+                }
+                _ => panic!("Expected Dashboard command"),
+            }
+        }
+
+        let help = Cli::command().render_long_help().to_string();
+        assert!(!help
+            .lines()
+            .any(|line| line.trim_start().starts_with("tui ")));
     }
 
     #[test]
@@ -3374,6 +3447,9 @@ mod tests {
             vec!["rtk", "run", "-c", "echo hi"],
             vec!["rtk", "hook-audit"],
             vec!["rtk", "cc-economics"],
+            vec!["rtk", "server"],
+            vec!["rtk", "dashboard"],
+            vec!["rtk", "tui"],
         ];
         for args in &meta_cmds_that_parse {
             let result = Cli::try_parse_from(args.iter());

@@ -1,7 +1,7 @@
 //! Runs TOML filter inline tests to make sure filter rules work correctly.
 
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -65,7 +65,7 @@ pub fn run(filter: Option<String>, require_all: bool) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CheckStatus {
     Pass,
@@ -75,20 +75,20 @@ pub enum CheckStatus {
     NotEnabled,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Check {
     pub status: CheckStatus,
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathCheck {
     pub path: String,
     pub status: CheckStatus,
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HashCheck {
     pub path: String,
     pub expected_sha256: Option<String>,
@@ -96,7 +96,7 @@ pub struct HashCheck {
     pub status: CheckStatus,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AgentStatus {
     Ready,
@@ -105,7 +105,7 @@ pub enum AgentStatus {
     PromptOnly,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentVerification {
     pub id: String,
     pub name: String,
@@ -123,7 +123,7 @@ pub struct AgentVerification {
     pub stale_artifacts: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AllAgentsVerification {
     pub schema_version: u8,
     pub complete: bool,
@@ -148,9 +148,22 @@ pub fn collect_all_agents() -> Result<AllAgentsVerification> {
     collect_all_agents_at(&paths)
 }
 
+/// Collect agent state without a filesystem write probe. Server and dashboard
+/// callers use this path so their read-only surfaces never create audit state.
+pub fn collect_all_agents_read_only() -> Result<AllAgentsVerification> {
+    let paths = IntegrationPaths::resolve()?;
+    collect_all_agents_at_with_audit(&paths, audit_check_read_only())
+}
+
 pub(crate) fn collect_all_agents_at(paths: &IntegrationPaths) -> Result<AllAgentsVerification> {
+    collect_all_agents_at_with_audit(paths, audit_check())
+}
+
+fn collect_all_agents_at_with_audit(
+    paths: &IntegrationPaths,
+    audit: Check,
+) -> Result<AllAgentsVerification> {
     let rewrite = live_rewrite_check();
-    let audit = audit_check();
     let binary_hash = current_binary_hash();
     let mut agents = Vec::with_capacity(INTEGRATIONS.len());
 
@@ -536,6 +549,26 @@ fn audit_check() -> Check {
     match super::audit::probe_writable() {
         Ok(path) => pass(format!("audit directory is appendable: {}", path.display())),
         Err(detail) => fail(detail),
+    }
+}
+
+fn audit_check_read_only() -> Check {
+    if std::env::var("RTK_HOOK_AUDIT").as_deref() != Ok("1") {
+        return Check {
+            status: CheckStatus::NotEnabled,
+            detail: "RTK_HOOK_AUDIT is not 1; enable it to record hook events".to_string(),
+        };
+    }
+    match super::audit::directory() {
+        Some(path) if path.is_dir() => Check {
+            status: CheckStatus::Incomplete,
+            detail: format!(
+                "audit is configured at {}; use rtk verify --all-agents for a live write probe",
+                path.display()
+            ),
+        },
+        Some(path) => fail(format!("audit directory is missing: {}", path.display())),
+        None => fail("set RTK_AUDIT_DIR or XDG_DATA_HOME; implicit ~/.local ownership is disabled"),
     }
 }
 
