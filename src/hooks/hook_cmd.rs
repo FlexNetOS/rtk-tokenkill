@@ -438,6 +438,142 @@ fn run_claude_inner(input: &str) -> Option<String> {
     }
 }
 
+// ── OpenAI Codex native hook ───────────────────────────────────
+
+/// Extract the command field Codex exposes for shell execution.
+///
+/// Current Codex releases canonicalize both the shell tool and unified
+/// `exec_command` to `tool_name: "Bash"` with `tool_input.command`. The
+/// explicit `exec_command`/`cmd` shape is accepted defensively for older or
+/// embedded hosts that forward the underlying function call without that
+/// canonicalization.
+fn codex_command(v: &Value) -> Option<(&str, &'static str)> {
+    if v.get("hook_event_name")
+        .and_then(Value::as_str)
+        .is_some_and(|event| event != PRE_TOOL_USE_KEY)
+    {
+        return None;
+    }
+
+    match v.get("tool_name").and_then(Value::as_str) {
+        Some("Bash") | Some("bash") => v
+            .pointer("/tool_input/command")
+            .and_then(Value::as_str)
+            .filter(|cmd| !cmd.is_empty())
+            .map(|cmd| (cmd, "command")),
+        Some("exec_command") => v
+            .pointer("/tool_input/cmd")
+            .and_then(Value::as_str)
+            .filter(|cmd| !cmd.is_empty())
+            .map(|cmd| (cmd, "cmd"))
+            .or_else(|| {
+                v.pointer("/tool_input/command")
+                    .and_then(Value::as_str)
+                    .filter(|cmd| !cmd.is_empty())
+                    .map(|cmd| (cmd, "command"))
+            }),
+        _ => None,
+    }
+}
+
+fn process_codex_payload_with_decision(v: &Value, decision: HookDecision) -> PayloadAction {
+    let Some((cmd, command_key)) = codex_command(v) else {
+        return PayloadAction::Ignore;
+    };
+
+    let rewritten = match decision {
+        HookDecision::Deny => {
+            return PayloadAction::Skip {
+                reason: "skip:deny_rule",
+                cmd: cmd.to_string(),
+            };
+        }
+        HookDecision::Defer => {
+            return PayloadAction::Skip {
+                reason: "skip:defer",
+                cmd: cmd.to_string(),
+            };
+        }
+        // Codex currently rejects `ask` together with `updatedInput`. The
+        // trusted hook therefore uses the only supported rewrite contract:
+        // `allow` plus the replacement input. Deny rules and commands RTK
+        // cannot attest still fail open to Codex unchanged above.
+        HookDecision::AllowRewrite(rewritten) | HookDecision::AskRewrite(rewritten) => rewritten,
+    };
+
+    let mut updated_input = v.get("tool_input").cloned().unwrap_or_else(|| json!({}));
+    let Some(input) = updated_input.as_object_mut() else {
+        return PayloadAction::Ignore;
+    };
+    input.insert(command_key.into(), Value::String(rewritten.clone()));
+
+    PayloadAction::Rewrite {
+        cmd: cmd.to_string(),
+        rewritten,
+        output: json!({
+            "hookSpecificOutput": {
+                "hookEventName": PRE_TOOL_USE_KEY,
+                "permissionDecision": "allow",
+                "permissionDecisionReason": "RTK auto-rewrite",
+                "updatedInput": updated_input
+            }
+        }),
+    }
+}
+
+fn process_codex_payload(v: &Value) -> PayloadAction {
+    let Some((cmd, _)) = codex_command(v) else {
+        return PayloadAction::Ignore;
+    };
+    process_codex_payload_with_decision(v, decide_hook_action(cmd, permissions::Host::Claude))
+}
+
+/// Run the Codex `PreToolUse` hook.
+///
+/// Hook protocol failures are deliberately silent and return success so a
+/// malformed or future payload can never prevent Codex from running the
+/// original tool call.
+pub fn run_codex() -> Result<()> {
+    let input = match read_stdin_limited() {
+        Ok(input) => input,
+        Err(_) => return Ok(()),
+    };
+    let input = strip_leading_bom(&input).trim();
+    if input.is_empty() {
+        return Ok(());
+    }
+
+    let v: Value = match serde_json::from_str(input) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+
+    match process_codex_payload(&v) {
+        PayloadAction::Rewrite {
+            cmd,
+            rewritten,
+            output,
+        } => {
+            audit_log("rewrite", &cmd, &rewritten);
+            let _ = writeln!(io::stdout(), "{output}");
+        }
+        PayloadAction::Skip { reason, cmd } => audit_log(reason, &cmd, ""),
+        PayloadAction::Ignore => {}
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+fn run_codex_inner_with_verdict(input: &str, verdict: PermissionVerdict) -> Option<String> {
+    let v: Value = serde_json::from_str(strip_leading_bom(input).trim()).ok()?;
+    let (cmd, _) = codex_command(&v)?;
+    match process_codex_payload_with_decision(&v, decide_from_verdict(cmd, verdict)) {
+        PayloadAction::Rewrite { output, .. } => Some(output.to_string()),
+        _ => None,
+    }
+}
+
 // ── Cursor native hook ─────────────────────────────────────────
 
 /// Cursor on Windows ships hook payloads with one or more leading
@@ -1135,6 +1271,92 @@ mod tests {
     fn test_claude_no_tool_input_passthrough() {
         let input = json!({ "tool_name": "Bash" }).to_string();
         assert!(run_claude_inner(&input).is_none());
+    }
+
+    // --- Codex handler ---
+
+    const CODEX_BASH_FIXTURE: &str =
+        include_str!("../../tests/fixtures/hooks/codex/bash-pre-tool-use.json");
+    const CODEX_UNIFIED_EXEC_FIXTURE: &str =
+        include_str!("../../tests/fixtures/hooks/codex/unified-exec-pre-tool-use.json");
+
+    fn codex_result(input: &str, verdict: PermissionVerdict) -> Value {
+        serde_json::from_str(
+            &run_codex_inner_with_verdict(input, verdict)
+                .expect("supported Codex payload should be rewritten"),
+        )
+        .expect("Codex hook output should be JSON")
+    }
+
+    #[test]
+    fn test_codex_bash_fixture_uses_supported_rewrite_contract() {
+        let output = codex_result(CODEX_BASH_FIXTURE, PermissionVerdict::Allow);
+        let hook = &output["hookSpecificOutput"];
+
+        assert_eq!(hook["hookEventName"], PRE_TOOL_USE_KEY);
+        assert_eq!(hook["permissionDecision"], "allow");
+        assert_eq!(hook["updatedInput"]["command"], "rtk git status");
+        assert_eq!(hook["updatedInput"]["yield_time_ms"], 10000);
+        assert!(hook.get("continue").is_none());
+        assert!(hook.get("stopReason").is_none());
+    }
+
+    #[test]
+    fn test_codex_unified_exec_fixture_preserves_transport_fields() {
+        let output = codex_result(CODEX_UNIFIED_EXEC_FIXTURE, PermissionVerdict::Allow);
+        let updated = &output["hookSpecificOutput"]["updatedInput"];
+
+        assert_eq!(updated["cmd"], "rtk cargo test");
+        assert_eq!(updated["workdir"], "/tmp/rtk-fixture");
+        assert_eq!(updated["yield_time_ms"], 30000);
+    }
+
+    #[test]
+    fn test_codex_default_permission_uses_only_supported_allow_rewrite() {
+        let output = codex_result(CODEX_BASH_FIXTURE, PermissionVerdict::Default);
+        let hook = &output["hookSpecificOutput"];
+
+        assert_eq!(hook["permissionDecision"], "allow");
+        assert_eq!(hook["updatedInput"]["command"], "rtk git status");
+    }
+
+    #[test]
+    fn test_codex_deny_and_unsupported_commands_fail_open() {
+        assert!(
+            run_codex_inner_with_verdict(CODEX_BASH_FIXTURE, PermissionVerdict::Deny).is_none()
+        );
+
+        let unsupported = json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "apply_patch",
+            "tool_input": { "command": "*** Begin Patch" }
+        })
+        .to_string();
+        assert!(run_codex_inner_with_verdict(&unsupported, PermissionVerdict::Allow).is_none());
+    }
+
+    #[test]
+    fn test_codex_malformed_and_wrong_event_fail_open() {
+        assert!(run_codex_inner_with_verdict("not json", PermissionVerdict::Allow).is_none());
+
+        let wrong_event = json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": { "command": "git status" }
+        })
+        .to_string();
+        assert!(run_codex_inner_with_verdict(&wrong_event, PermissionVerdict::Allow).is_none());
+    }
+
+    #[test]
+    fn test_codex_unattestable_command_fails_open() {
+        let input = json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": { "command": "git status $(rm -rf /tmp/x)" }
+        })
+        .to_string();
+        assert!(run_codex_inner_with_verdict(&input, PermissionVerdict::Allow).is_none());
     }
 
     // --- Cursor handler ---

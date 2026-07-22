@@ -1,0 +1,13 @@
+{
+  "session_id": "fixture-session",
+  "turn_id": "fixture-turn",
+  "cwd": "/tmp/rtk-fixture",
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_use_id": "fixture-tool",
+  "tool_input": {
+    "command": "git status",
+    "yield_time_ms": 10000
+  }
+}

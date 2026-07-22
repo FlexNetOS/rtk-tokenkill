@@ -1,0 +1,14 @@
+{
+  "session_id": "fixture-session",
+  "turn_id": "fixture-turn",
+  "cwd": "/tmp/rtk-fixture",
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "never",
+  "tool_name": "exec_command",
+  "tool_use_id": "fixture-tool",
+  "tool_input": {
+    "cmd": "cargo test",
+    "workdir": "/tmp/rtk-fixture",
+    "yield_time_ms": 30000
+  }
+}
