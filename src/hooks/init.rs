@@ -17,9 +17,9 @@ use super::constants::{
     CURSOR_HOOK_COMMAND, DROID_DIR, DROID_EXECUTE_MATCHER, DROID_HOME_ENV, DROID_HOOKS_FILE,
     DROID_HOOKS_SUBDIR, DROID_HOOK_COMMAND, DROID_SETTINGS_FILE, GEMINI_HOOK_FILE, HERMES_DIR,
     HERMES_PLUGINS_SUBDIR, HERMES_PLUGIN_INIT_FILE, HERMES_PLUGIN_MANIFEST_FILE,
-    HERMES_PLUGIN_NAME, HOOKS_JSON, HOOKS_SUBDIR, PI_CODING_AGENT_DIR_ENV, PI_DIR,
-    PI_EXTENSIONS_SUBDIR, PI_LOCAL_DIR, PI_PLUGIN_FILE, PRE_TOOL_USE_KEY, REWRITE_HOOK_FILE,
-    SETTINGS_JSON,
+    HERMES_PLUGIN_NAME, HOOKS_JSON, HOOKS_SUBDIR, OPENCLAW_DIR, OPENCLAW_MANIFEST_FILE,
+    OPENCLAW_PLUGIN_FILE, PI_CODING_AGENT_DIR_ENV, PI_DIR, PI_EXTENSIONS_SUBDIR, PI_LOCAL_DIR,
+    PI_PLUGIN_FILE, PRE_TOOL_USE_KEY, REWRITE_HOOK_FILE, SETTINGS_JSON,
 };
 use super::integrations::{Integration, INTEGRATIONS};
 use super::integrity;
@@ -30,6 +30,8 @@ const OPENCODE_PLUGIN: &str = include_str!("../../hooks/opencode/rtk.ts");
 
 // Embedded Pi extension (auto-rewrite)
 const PI_PLUGIN: &str = include_str!("../../hooks/pi/rtk.ts");
+const OPENCLAW_PLUGIN: &str = include_str!("../../openclaw/index.ts");
+const OPENCLAW_MANIFEST: &str = include_str!("../../openclaw/openclaw.plugin.json");
 
 // Embedded slim RTK awareness instructions
 const RTK_SLIM: &str = include_str!("../../hooks/claude/rtk-awareness.md");
@@ -4969,6 +4971,7 @@ pub(crate) struct IntegrationPaths {
     pub(crate) opencode_plugin: PathBuf,
     pub(crate) pi_plugin: PathBuf,
     pub(crate) hermes_home: PathBuf,
+    pub(crate) openclaw_plugin: PathBuf,
     pub(crate) droid_dir: PathBuf,
     pub(crate) copilot_dir: PathBuf,
     pub(crate) project_dir: PathBuf,
@@ -4984,6 +4987,7 @@ impl IntegrationPaths {
             opencode_plugin: prepare_opencode_plugin_path()?,
             pi_plugin: pi_plugin_path(&resolve_pi_dir()?),
             hermes_home: resolve_hermes_home()?,
+            openclaw_plugin: resolve_home_subdir(OPENCLAW_DIR)?,
             droid_dir: resolve_droid_dir()?,
             copilot_dir: copilot_user_dir()?,
             project_dir: std::env::current_dir().context("Cannot determine current project")?,
@@ -5000,6 +5004,7 @@ impl IntegrationPaths {
             opencode_plugin: opencode_plugin_path(&home.join(CONFIG_DIR).join(OPENCODE_SUBDIR)),
             pi_plugin: pi_plugin_path(&home.join(PI_DIR)),
             hermes_home: home.join(HERMES_DIR),
+            openclaw_plugin: home.join(OPENCLAW_DIR),
             droid_dir: home.join(DROID_DIR),
             copilot_dir: home.join(COPILOT_USER_DIR),
             project_dir: project.to_path_buf(),
@@ -5070,6 +5075,7 @@ fn install_integration_at(
         "opencode" => ensure_opencode_plugin_installed(&paths.opencode_plugin, ctx).map(drop),
         "pi" => install_pi_all_at(&paths.pi_plugin, ctx),
         "hermes" => run_hermes_mode_at(&paths.hermes_home, ctx),
+        "openclaw" => install_openclaw_at(&paths.openclaw_plugin, ctx),
         "windsurf" => install_prompt_block_at(
             &paths.project_dir.join(".windsurfrules"),
             WINDSURF_RULES,
@@ -5112,6 +5118,7 @@ fn uninstall_integration_at(
         "opencode" => remove_owned_file(&paths.opencode_plugin, OPENCODE_PLUGIN, ctx).map(drop),
         "pi" => remove_owned_file(&paths.pi_plugin, PI_PLUGIN, ctx).map(drop),
         "hermes" => uninstall_hermes_at(&paths.hermes_home, ctx).map(drop),
+        "openclaw" => uninstall_openclaw_at(&paths.openclaw_plugin, ctx),
         "windsurf" => remove_prompt_block_at(&paths.project_dir.join(".windsurfrules"), ctx),
         "cline" => remove_prompt_block_at(&paths.project_dir.join(".clinerules"), ctx),
         "kilocode" => {
@@ -5244,6 +5251,40 @@ fn install_pi_all_at(plugin_path: &Path, ctx: InitContext) -> Result<()> {
         ensure_pi_extensions_dir(parent, "Pi extensions directory", ctx)?;
     }
     ensure_pi_plugin_installed(plugin_path, ctx).map(drop)
+}
+
+fn install_openclaw_at(plugin_dir: &Path, ctx: InitContext) -> Result<()> {
+    if !ctx.dry_run {
+        fs::create_dir_all(plugin_dir).with_context(|| {
+            format!(
+                "Failed to create OpenClaw extension: {}",
+                plugin_dir.display()
+            )
+        })?;
+    }
+    write_if_changed(
+        &plugin_dir.join(OPENCLAW_PLUGIN_FILE),
+        OPENCLAW_PLUGIN,
+        "OpenClaw plugin",
+        ctx,
+    )?;
+    write_if_changed(
+        &plugin_dir.join(OPENCLAW_MANIFEST_FILE),
+        OPENCLAW_MANIFEST,
+        "OpenClaw manifest",
+        ctx,
+    )?;
+    Ok(())
+}
+
+fn uninstall_openclaw_at(plugin_dir: &Path, ctx: InitContext) -> Result<()> {
+    remove_owned_file(&plugin_dir.join(OPENCLAW_PLUGIN_FILE), OPENCLAW_PLUGIN, ctx)?;
+    remove_owned_file(
+        &plugin_dir.join(OPENCLAW_MANIFEST_FILE),
+        OPENCLAW_MANIFEST,
+        ctx,
+    )?;
+    Ok(())
 }
 
 fn install_cursor_all_at(cursor_dir: &Path, ctx: InitContext) -> Result<()> {
@@ -5540,7 +5581,7 @@ mod tests {
                 .iter()
                 .filter(|entry| entry.automatically_intercepts)
                 .count(),
-            9
+            10
         );
 
         uninstall_all_agents_at(&paths, ctx).unwrap();

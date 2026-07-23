@@ -65,15 +65,24 @@ pub fn check(icm_url: Option<&str>) -> IcmHealth {
                     detail: format!("ICM health response could not be read: {error}"),
                 };
             }
-            let reported_status = serde_json::from_str::<serde_json::Value>(&body)
+            let reported_status = match serde_json::from_str::<serde_json::Value>(&body)
                 .ok()
                 .and_then(|value| {
                     value
                         .get("status")
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_string)
-                })
-                .unwrap_or_else(|| "ok".to_string());
+                }) {
+                Some(status) => status,
+                None => {
+                    return IcmHealth {
+                        configured: true,
+                        reachable: true,
+                        status: "invalid-response".to_string(),
+                        detail: "ICM health response was not JSON with a string status".to_string(),
+                    };
+                }
+            };
             IcmHealth {
                 configured: true,
                 reachable: true,
@@ -193,5 +202,30 @@ mod tests {
         assert!(health.configured);
         assert!(health.reachable);
         assert_eq!(health.status, "healthy");
+    }
+
+    #[test]
+    fn rejects_successful_malformed_health_responses() {
+        for body in ["not-json", r#"{"ok":true}"#, r#"{"status":42}"#] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let body = body.to_string();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 512];
+                let _ = stream.read(&mut request).unwrap();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+            });
+            let health = check(Some(&format!("http://{address}")));
+            server.join().unwrap();
+            assert_eq!(health.status, "invalid-response");
+            assert!(health.reachable);
+        }
     }
 }

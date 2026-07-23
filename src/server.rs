@@ -57,7 +57,8 @@ fn parse_loopback_bind(value: &str) -> Result<SocketAddr> {
 
 fn server_token_from(token: Option<String>) -> Result<String> {
     let token = token.context("RTK_SERVER_TOKEN is required")?;
-    if token.trim().is_empty() {
+    let token = token.trim().to_string();
+    if token.is_empty() {
         anyhow::bail!("RTK_SERVER_TOKEN must not be empty");
     }
     Ok(token)
@@ -284,6 +285,10 @@ mod tests {
     fn token_is_required_and_compared_without_prefix_acceptance() {
         assert!(server_token_from(None).is_err());
         assert!(server_token_from(Some("  ".to_string())).is_err());
+        assert_eq!(
+            server_token_from(Some("  exact-token  ".to_string())).unwrap(),
+            "exact-token"
+        );
         let request = parsed("/v1/config", Some("Bearer exact-token"));
         assert!(request_is_authorized(&request, "exact-token"));
         assert!(!request_is_authorized(&request, "exact-token-longer"));

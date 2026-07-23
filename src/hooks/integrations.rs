@@ -105,6 +105,14 @@ pub const INTEGRATIONS: &[Integration] = &[
         hook_command: None,
     },
     Integration {
+        id: "openclaw",
+        name: "OpenClaw",
+        kind: IntegrationKind::Plugin,
+        scope: IntegrationScope::Global,
+        automatically_intercepts: true,
+        hook_command: None,
+    },
+    Integration {
         id: "windsurf",
         name: "Windsurf",
         kind: IntegrationKind::PromptOnly,

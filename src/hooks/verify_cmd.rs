@@ -11,7 +11,8 @@ use crate::discover::registry::rewrite_command;
 use super::constants::{
     COPILOT_HOOK_FILE, COPILOT_INSTRUCTIONS_FILE, DROID_HOOKS_FILE, DROID_HOOKS_SUBDIR,
     DROID_SETTINGS_FILE, GEMINI_HOOK_FILE, HERMES_PLUGINS_SUBDIR, HERMES_PLUGIN_INIT_FILE,
-    HERMES_PLUGIN_MANIFEST_FILE, HERMES_PLUGIN_NAME, HOOKS_JSON, HOOKS_SUBDIR, SETTINGS_JSON,
+    HERMES_PLUGIN_MANIFEST_FILE, HERMES_PLUGIN_NAME, HOOKS_JSON, HOOKS_SUBDIR,
+    OPENCLAW_MANIFEST_FILE, OPENCLAW_PLUGIN_FILE, SETTINGS_JSON,
 };
 use super::init::IntegrationPaths;
 use super::integrations::{Integration, IntegrationKind, IntegrationScope, INTEGRATIONS};
@@ -386,6 +387,22 @@ fn registration_check(
                 "Hermes plugin",
             )
         }
+        "openclaw" => {
+            let plugin = paths.openclaw_plugin.clone();
+            let index = plugin.join(OPENCLAW_PLUGIN_FILE);
+            let manifest = plugin.join(OPENCLAW_MANIFEST_FILE);
+            let registered = file_equals(&index, include_bytes!("../../openclaw/index.ts"))
+                && file_equals(
+                    &manifest,
+                    include_bytes!("../../openclaw/openclaw.plugin.json"),
+                );
+            (
+                registered,
+                vec![index, manifest],
+                usize::from(registered),
+                "OpenClaw plugin",
+            )
+        }
         "windsurf" => prompt_registration(&paths.project_dir.join(".windsurfrules")),
         "cline" => prompt_registration(&paths.project_dir.join(".clinerules")),
         "kilocode" => prompt_registration(&paths.project_dir.join(".kilocode/rules/rtk-rules.md")),
@@ -466,6 +483,16 @@ fn expected_artifacts(id: &str, paths: &IntegrationPaths) -> Vec<(PathBuf, &'sta
                 ),
             ]
         }
+        "openclaw" => vec![
+            (
+                paths.openclaw_plugin.join(OPENCLAW_PLUGIN_FILE),
+                include_bytes!("../../openclaw/index.ts"),
+            ),
+            (
+                paths.openclaw_plugin.join(OPENCLAW_MANIFEST_FILE),
+                include_bytes!("../../openclaw/openclaw.plugin.json"),
+            ),
+        ],
         _ => Vec::new(),
     }
 }

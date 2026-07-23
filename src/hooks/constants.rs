@@ -60,3 +60,7 @@ pub const HERMES_PLUGINS_SUBDIR: &str = "plugins";
 pub const HERMES_PLUGIN_NAME: &str = "rtk-rewrite";
 pub const HERMES_PLUGIN_INIT_FILE: &str = "__init__.py";
 pub const HERMES_PLUGIN_MANIFEST_FILE: &str = "plugin.yaml";
+
+pub const OPENCLAW_DIR: &str = ".openclaw/extensions/rtk-rewrite";
+pub const OPENCLAW_PLUGIN_FILE: &str = "index.ts";
+pub const OPENCLAW_MANIFEST_FILE: &str = "openclaw.plugin.json";
