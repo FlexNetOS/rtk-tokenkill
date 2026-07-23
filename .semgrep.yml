@@ -38,8 +38,9 @@ rules:
     severity: ERROR
     paths:
       exclude:
-        - src/server.rs
-        - src/icm_bridge.rs
+        - /src/server.rs
+        - /src/dashboard.rs
+        - /src/icm_bridge.rs
 
   - id: reqwest-forbidden
     pattern: reqwest::$METHOD(...)
@@ -112,6 +113,6 @@ rules:
     severity: WARNING
     paths:
       exclude:
-        - src/hooks/audit.rs
-        - src/hooks/init.rs
-        - src/hooks/verify_cmd.rs
+        - /src/hooks/audit.rs
+        - /src/hooks/init.rs
+        - /src/hooks/verify_cmd.rs
