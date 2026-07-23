@@ -19,7 +19,10 @@ use super::integrity;
 
 const AGENTS_MD: &str = "AGENTS.md";
 const GEMINI_MD: &str = "GEMINI.md";
+const RULES_MD: &str = "RULES.md";
 const RTK_MD: &str = "RTK.md";
+const RTK_BLOCK_START: &str = "<!-- rtk-instructions";
+const RTK_BLOCK_END: &str = "<!-- /rtk-instructions -->";
 
 /// Run TOML filter inline tests.
 ///
@@ -207,10 +210,7 @@ fn verify_integration(
         });
     }
 
-    let mut hashes = expected_artifacts(integration.id, paths)
-        .into_iter()
-        .map(|(path, expected)| hash_check(&path, Some(expected)))
-        .collect::<Vec<_>>();
+    let mut hashes = expected_artifact_checks(integration.id, paths);
     if integration.kind == IntegrationKind::NativeHook {
         if let Some(binary_hash) = binary_hash {
             hashes.push(binary_hash);
@@ -470,6 +470,37 @@ fn expected_artifacts(id: &str, paths: &IntegrationPaths) -> Vec<(PathBuf, &'sta
     }
 }
 
+fn expected_artifact_checks(id: &str, paths: &IntegrationPaths) -> Vec<HashCheck> {
+    if id == "codex" {
+        let rtk_md = paths.codex_dir.join(RTK_MD);
+        if !rtk_md.is_file() {
+            return vec![managed_codex_rules_check(&paths.codex_dir.join(RULES_MD))];
+        }
+    }
+
+    expected_artifacts(id, paths)
+        .into_iter()
+        .map(|(path, expected)| hash_check(&path, Some(expected)))
+        .collect()
+}
+
+fn managed_codex_rules_check(path: &Path) -> HashCheck {
+    let actual_sha256 = integrity::compute_hash(path).ok();
+    let has_complete_rtk_block = fs::read_to_string(path).ok().is_some_and(|content| {
+        content.contains(RTK_BLOCK_START) && content.contains(RTK_BLOCK_END)
+    });
+    HashCheck {
+        path: path.display().to_string(),
+        expected_sha256: None,
+        actual_sha256,
+        status: if has_complete_rtk_block {
+            CheckStatus::Pass
+        } else {
+            CheckStatus::Fail
+        },
+    }
+}
+
 fn path_check(path: &Path) -> PathCheck {
     if path.is_file() {
         PathCheck {
@@ -504,25 +535,23 @@ fn hash_check(path: &Path, expected: Option<&[u8]>) -> HashCheck {
 
 fn current_binary_hash() -> Option<HashCheck> {
     let current = std::env::current_exe().ok()?;
-    let expected_sha256 = integrity::compute_hash(&current).ok()?;
-    #[cfg(test)]
-    let resolved = Ok::<PathBuf, anyhow::Error>(current);
-    #[cfg(not(test))]
-    let resolved = crate::core::utils::resolve_binary("rtk");
-    let (path, actual_sha256) = match resolved {
-        Ok(path) => {
-            let hash = integrity::compute_hash(&path).ok();
-            (path.display().to_string(), hash)
-        }
-        Err(_) => ("rtk (unresolved on PATH)".to_string(), None),
-    };
+    let resolved = crate::core::utils::resolve_binary("rtk").ok();
+    binary_hash_for_paths(&current, resolved.as_deref())
+}
+
+fn binary_hash_for_paths(current: &Path, resolved: Option<&Path>) -> Option<HashCheck> {
+    let expected_sha256 = integrity::compute_hash(current).ok()?;
+    let matching_resolved = resolved
+        .filter(|path| integrity::compute_hash(path).ok().as_ref() == Some(&expected_sha256));
+    let verified_path = matching_resolved.unwrap_or(current);
+    let actual_sha256 = integrity::compute_hash(verified_path).ok();
     let status = if actual_sha256.as_ref() == Some(&expected_sha256) {
         CheckStatus::Pass
     } else {
         CheckStatus::Fail
     };
     Some(HashCheck {
-        path,
+        path: verified_path.display().to_string(),
         expected_sha256: Some(expected_sha256),
         actual_sha256,
         status,
@@ -838,6 +867,68 @@ mod all_agent_tests {
             .unwrap();
         assert_eq!(copilot.status, AgentStatus::Failed);
         assert_eq!(copilot.registration.status, CheckStatus::Fail);
+    }
+
+    #[test]
+    fn managed_codex_rules_are_an_awareness_artifact() {
+        let temp = TempDir::new().unwrap();
+        let paths =
+            IntegrationPaths::under(&temp.path().join("home"), &temp.path().join("project"));
+        install_all_agents_at(&paths, InitContext::default()).unwrap();
+        fs::remove_file(paths.codex_dir.join(RTK_MD)).unwrap();
+        fs::write(
+            paths.codex_dir.join("RULES.md"),
+            "<!-- rtk-instructions managed -->\nUse `rtk proxy`.\n<!-- /rtk-instructions -->\n",
+        )
+        .unwrap();
+
+        let report = collect_all_agents_at(&paths).unwrap();
+        let codex = report
+            .agents
+            .iter()
+            .find(|agent| agent.id == "codex")
+            .unwrap();
+        assert_eq!(codex.status, AgentStatus::Incomplete, "{codex:#?}");
+        assert!(codex
+            .hashes
+            .iter()
+            .any(|hash| { hash.path.ends_with("RULES.md") && hash.status == CheckStatus::Pass }));
+    }
+
+    #[test]
+    fn incomplete_managed_codex_rules_fail_awareness_verification() {
+        let temp = TempDir::new().unwrap();
+        let paths =
+            IntegrationPaths::under(&temp.path().join("home"), &temp.path().join("project"));
+        install_all_agents_at(&paths, InitContext::default()).unwrap();
+        fs::remove_file(paths.codex_dir.join(RTK_MD)).unwrap();
+        fs::write(
+            paths.codex_dir.join("RULES.md"),
+            "<!-- rtk-instructions managed -->\nmissing closing marker\n",
+        )
+        .unwrap();
+
+        let report = collect_all_agents_at(&paths).unwrap();
+        let codex = report
+            .agents
+            .iter()
+            .find(|agent| agent.id == "codex")
+            .unwrap();
+        assert_eq!(codex.status, AgentStatus::Failed, "{codex:#?}");
+    }
+
+    #[test]
+    fn profile_wrapper_does_not_replace_the_running_payload_hash() {
+        let temp = TempDir::new().unwrap();
+        let payload = temp.path().join("rtk-payload");
+        let wrapper = temp.path().join("rtk-frontdoor");
+        fs::write(&payload, b"immutable RTK payload").unwrap();
+        fs::write(&wrapper, b"profile environment wrapper").unwrap();
+
+        let check = binary_hash_for_paths(&payload, Some(&wrapper)).unwrap();
+        assert_eq!(check.path, payload.display().to_string());
+        assert_eq!(check.status, CheckStatus::Pass);
+        assert_eq!(check.expected_sha256, check.actual_sha256);
     }
 
     #[test]

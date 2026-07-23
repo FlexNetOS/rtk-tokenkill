@@ -2,7 +2,10 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static PROBE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub fn directory() -> Option<PathBuf> {
     directory_from(
@@ -42,7 +45,7 @@ pub fn probe_writable() -> Result<PathBuf, String> {
     })?;
     fs::create_dir_all(&dir)
         .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
-    let probe = dir.join(format!(".audit-probe-{}", std::process::id()));
+    let probe = unique_probe_path(&dir);
     let result = OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -53,6 +56,14 @@ pub fn probe_writable() -> Result<PathBuf, String> {
         Ok(()) => Ok(dir),
         Err(error) => Err(format!("cannot append in {}: {error}", dir.display())),
     }
+}
+
+fn unique_probe_path(dir: &Path) -> PathBuf {
+    dir.join(format!(
+        ".audit-probe-{}-{}",
+        std::process::id(),
+        PROBE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ))
 }
 
 #[cfg(test)]
@@ -77,5 +88,11 @@ mod tests {
             Some(PathBuf::from("/srv/profile-data/rtk"))
         );
         assert_eq!(directory_from(None, None), None);
+    }
+
+    #[test]
+    fn audit_probe_paths_are_unique_within_a_process() {
+        let dir = Path::new("/srv/profile-data/rtk");
+        assert_ne!(unique_probe_path(dir), unique_probe_path(dir));
     }
 }

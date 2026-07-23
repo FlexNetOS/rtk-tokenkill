@@ -67,7 +67,11 @@ does not link an ICM Rust crate and does not forward the RTK server token.
 
 The dashboard reports Codex interception as incomplete until the generated
 hook is reviewed in Codex `/hooks`. RTK never reads or writes Codex's trust
-database.
+database. Awareness verification accepts either RTK's exact `RTK.md` artifact
+or a managed `RULES.md` containing a complete `rtk-instructions` marker block.
+When an environment frontdoor delegates to the immutable RTK payload, the
+binary digest follows the executing payload instead of comparing unlike wrapper
+and payload bytes.
 
 ## Behavioral provenance
 
