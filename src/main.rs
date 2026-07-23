@@ -1,10 +1,14 @@
 mod analytics;
 mod cmds;
 mod core;
+mod dashboard;
 mod discover;
 mod hooks;
+mod icm_bridge;
 mod learn;
+mod observability;
 mod parser;
+mod server;
 
 // Re-export command modules for routing
 use cmds::cloud::{aws_cmd, container, curl_cmd, psql_cmd, wget_cmd};
@@ -20,6 +24,7 @@ use cmds::php::{ecs_cmd, paratest_cmd, pest_cmd, php_cmd, phpstan_cmd, phpunit_c
 use cmds::python::{mypy_cmd, pip_cmd, pytest_cmd, ruff_cmd, uv_cmd};
 use cmds::ruby::{rake_cmd, rspec_cmd, rubocop_cmd};
 use cmds::rust::{cargo_cmd, runner};
+use cmds::scala::sbt_cmd;
 use cmds::system::{
     deps, env_cmd, find_cmd, format_cmd, json_cmd, local_llm, log_cmd, ls, pipe_cmd, read, search,
     summary, tree, wc_cmd,
@@ -46,6 +51,8 @@ pub enum AgentTarget {
     Kilocode,
     /// Google Antigravity
     Antigravity,
+    /// Kimi AI
+    Kimi,
     /// Pi coding agent
     Pi,
     /// Hermes CLI
@@ -382,7 +389,28 @@ enum Commands {
         #[arg(long)]
         uninstall: bool,
 
-        /// Target Codex CLI (uses AGENTS.md + RTK.md, no Claude hook patching)
+        /// Install every registered native hook, plugin, and prompt-only integration
+        #[arg(
+            long = "all-agents",
+            conflicts_with_all = [
+                "global",
+                "opencode",
+                "gemini",
+                "agent",
+                "show",
+                "claude_md",
+                "hook_only",
+                "auto_patch",
+                "no_patch",
+                "trust_filters",
+                "no_trust_filters",
+                "codex",
+                "copilot"
+            ]
+        )]
+        all_agents: bool,
+
+        /// Target Codex CLI (AGENTS.md + RTK.md + native PreToolUse hook)
         #[arg(long)]
         codex: bool,
 
@@ -668,11 +696,38 @@ enum Commands {
     /// Verify hook integrity and run TOML filter inline tests
     Verify {
         /// Run tests only for this filter name
-        #[arg(long)]
+        #[arg(long, conflicts_with = "all_agents")]
         filter: Option<String>,
         /// Fail if any filter has no inline tests (CI mode)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "all_agents")]
         require_all: bool,
+        /// Validate every registered agent integration
+        #[arg(long = "all-agents")]
+        all_agents: bool,
+        /// All-agent report format
+        #[arg(long, value_parser = ["text", "json"], requires = "all_agents")]
+        format: Option<String>,
+    },
+
+    /// Serve authenticated read-only RTK observability endpoints
+    Server {
+        /// Loopback address to bind
+        #[arg(long, default_value = "127.0.0.1:8745")]
+        bind: String,
+        /// Optional localhost ICM HTTP API base URL
+        #[arg(long)]
+        icm_url: Option<String>,
+    },
+
+    /// Open the five-view RTK terminal dashboard
+    #[command(alias = "tui")]
+    Dashboard {
+        /// Optional localhost `rtk server` base URL; local state is the default
+        #[arg(long)]
+        server: Option<String>,
+        /// Optional localhost ICM HTTP API base URL
+        #[arg(long)]
+        icm_url: Option<String>,
     },
 
     /// Ruff linter/formatter with compact output
@@ -786,6 +841,12 @@ enum Commands {
         command: GoCommands,
     },
 
+    /// SBT (Scala Build Tool) commands with compact output
+    Sbt {
+        #[command(subcommand)]
+        command: SbtCommands,
+    },
+
     /// Graphite (gt) stacked PR commands with compact output
     Gt {
         #[command(subcommand)]
@@ -849,6 +910,8 @@ enum Commands {
 enum HookCommands {
     /// Process Claude Code PreToolUse hook (reads JSON from stdin)
     Claude,
+    /// Process OpenAI Codex PreToolUse hook (reads JSON from stdin)
+    Codex,
     /// Process Cursor Agent hook (reads JSON from stdin)
     Cursor,
     /// Process Gemini CLI BeforeTool hook (reads JSON from stdin)
@@ -1246,6 +1309,31 @@ enum GoCommands {
     Other(Vec<OsString>),
 }
 
+#[derive(Debug, Subcommand)]
+enum SbtCommands {
+    /// Run tests with compact output (90% token reduction via ScalaTest filtering)
+    Test {
+        /// Additional sbt test arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Compile with compact output (errors only)
+    Compile {
+        /// Additional sbt compile arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Run application with noise-stripped output
+    Run {
+        /// Additional sbt run arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Passthrough: runs any unsupported sbt subcommand directly
+    #[command(external_subcommand)]
+    Other(Vec<OsString>),
+}
+
 fn run_fallback(parse_error: clap::Error) -> Result<i32> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -1543,7 +1631,7 @@ fn run_cli() -> Result<i32> {
     // Fire-and-forget telemetry ping (1/day, non-blocking)
     core::telemetry::maybe_ping();
 
-    let cli = match Cli::try_parse() {
+    let cli = match Cli::try_parse_from(std::env::args_os()) {
         Ok(cli) => cli,
         Err(e) => {
             if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) {
@@ -1970,6 +2058,7 @@ fn run_cli() -> Result<i32> {
             trust_filters,
             no_trust_filters,
             uninstall,
+            all_agents,
             codex,
             copilot,
             dry_run,
@@ -1978,7 +2067,9 @@ fn run_cli() -> Result<i32> {
                 verbose: cli.verbose,
                 dry_run,
             };
-            if show {
+            if all_agents {
+                hooks::init::run_all_agents(uninstall, ctx)?;
+            } else if show {
                 hooks::init::show_config(codex)?;
             } else if uninstall && copilot {
                 if global {
@@ -2025,6 +2116,11 @@ fn run_cli() -> Result<i32> {
                     );
                 }
                 hooks::init::run_antigravity_mode(ctx)?;
+            } else if agent == Some(AgentTarget::Kimi) {
+                if global {
+                    anyhow::bail!("Kimi AI is project-scoped. Use: rtk init --agent kimi");
+                }
+                hooks::init::run_kimi_mode(ctx)?;
             } else if agent == Some(AgentTarget::Hermes) {
                 hooks::init::run_hermes_mode(ctx)?;
             } else if agent == Some(AgentTarget::Droid) {
@@ -2350,6 +2446,13 @@ fn run_cli() -> Result<i32> {
             GoCommands::Other(args) => go_cmd::run_other(&args, cli.verbose)?,
         },
 
+        Commands::Sbt { command } => match command {
+            SbtCommands::Test { args } => sbt_cmd::run_test(&args, cli.verbose)?,
+            SbtCommands::Compile { args } => sbt_cmd::run_compile(&args, cli.verbose)?,
+            SbtCommands::Run { args } => sbt_cmd::run_run(&args, cli.verbose)?,
+            SbtCommands::Other(args) => sbt_cmd::run_other(&args, cli.verbose)?,
+        },
+
         Commands::Gt { command } => match command {
             GtCommands::Log { args } => gt_cmd::run_log(&args, cli.verbose)?,
             GtCommands::Submit { args } => gt_cmd::run_submit(&args, cli.verbose)?,
@@ -2374,6 +2477,10 @@ fn run_cli() -> Result<i32> {
         Commands::Hook { command } => match command {
             HookCommands::Claude => {
                 hooks::hook_cmd::run_claude()?;
+                0
+            }
+            HookCommands::Codex => {
+                hooks::hook_cmd::run_codex()?;
                 0
             }
             HookCommands::Cursor => {
@@ -2639,15 +2746,34 @@ fn run_cli() -> Result<i32> {
         Commands::Verify {
             filter,
             require_all,
+            all_agents,
+            format,
         } => {
-            if filter.is_some() {
+            if all_agents {
+                if hooks::verify_cmd::run_all_agents(format.as_deref().unwrap_or("text"))? {
+                    0
+                } else {
+                    1
+                }
+            } else if filter.is_some() {
                 // Filter-specific mode: run only that filter's tests
                 hooks::verify_cmd::run(filter, require_all)?;
+                0
             } else {
                 // Default or --require-all: always run integrity check first
                 hooks::integrity::run_verify(cli.verbose)?;
                 hooks::verify_cmd::run(None, require_all)?;
+                0
             }
+        }
+
+        Commands::Server { bind, icm_url } => {
+            server::run(&bind, icm_url.as_deref())?;
+            0
+        }
+
+        Commands::Dashboard { server, icm_url } => {
+            dashboard::run(server.as_deref(), icm_url.as_deref())?;
             0
         }
     };
@@ -2718,6 +2844,7 @@ fn is_operational_command(cmd: &Commands) -> bool {
             | Commands::Pip { .. }
             | Commands::Uv { .. }
             | Commands::Go { .. }
+            | Commands::Sbt { .. }
             | Commands::GolangciLint { .. }
             | Commands::Gt { .. }
     )
@@ -2871,6 +2998,99 @@ mod tests {
             }
             _ => panic!("Expected Init command"),
         }
+    }
+
+    #[test]
+    fn test_try_parse_init_all_agents_install_and_uninstall() {
+        for args in [
+            vec!["rtk", "init", "--all-agents"],
+            vec!["rtk", "init", "--all-agents", "--uninstall"],
+        ] {
+            let expect_uninstall = args.contains(&"--uninstall");
+            let cli = Cli::try_parse_from(args).unwrap();
+            match cli.command {
+                Commands::Init {
+                    all_agents,
+                    uninstall,
+                    ..
+                } => {
+                    assert!(all_agents);
+                    assert_eq!(uninstall, expect_uninstall);
+                }
+                _ => panic!("Expected Init command"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_init_all_agents_rejects_individual_target_flags() {
+        for extra in ["--codex", "--gemini", "--copilot", "--global"] {
+            let result = Cli::try_parse_from(["rtk", "init", "--all-agents", extra]);
+            assert!(result.is_err(), "must reject {extra}");
+        }
+    }
+
+    #[test]
+    fn test_try_parse_verify_all_agents_formats() {
+        for format in ["text", "json"] {
+            let cli =
+                Cli::try_parse_from(["rtk", "verify", "--all-agents", "--format", format]).unwrap();
+            match cli.command {
+                Commands::Verify {
+                    all_agents,
+                    format: parsed_format,
+                    ..
+                } => {
+                    assert!(all_agents);
+                    assert_eq!(parsed_format.as_deref(), Some(format));
+                }
+                _ => panic!("Expected Verify command"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_verify_format_requires_all_agents() {
+        let result = Cli::try_parse_from(["rtk", "verify", "--format", "json"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_server_and_dashboard_public_interfaces_parse() {
+        use clap::CommandFactory;
+
+        let server = Cli::try_parse_from([
+            "rtk",
+            "server",
+            "--bind",
+            "127.0.0.1:9000",
+            "--icm-url",
+            "http://127.0.0.1:8746",
+        ])
+        .unwrap();
+        match server.command {
+            Commands::Server { bind, icm_url } => {
+                assert_eq!(bind, "127.0.0.1:9000");
+                assert_eq!(icm_url.as_deref(), Some("http://127.0.0.1:8746"));
+            }
+            _ => panic!("Expected Server command"),
+        }
+
+        for name in ["dashboard", "tui"] {
+            let dashboard =
+                Cli::try_parse_from(["rtk", name, "--server", "http://[::1]:8745"]).unwrap();
+            match dashboard.command {
+                Commands::Dashboard { server, .. } => {
+                    assert_eq!(server.as_deref(), Some("http://[::1]:8745"));
+                }
+                _ => panic!("Expected Dashboard command"),
+            }
+        }
+
+        let help = Cli::command().render_long_help().to_string();
+        assert!(!help
+            .lines()
+            .any(|line| line.trim_start().starts_with("tui ")));
     }
 
     #[test]
@@ -3097,6 +3317,7 @@ mod tests {
             "golangci-lint",
             "gradlew",
             "mvn",
+            "sbt",
             "php",
             "phpunit",
             "phpstan",
@@ -3226,6 +3447,9 @@ mod tests {
             vec!["rtk", "run", "-c", "echo hi"],
             vec!["rtk", "hook-audit"],
             vec!["rtk", "cc-economics"],
+            vec!["rtk", "server"],
+            vec!["rtk", "dashboard"],
+            vec!["rtk", "tui"],
         ];
         for args in &meta_cmds_that_parse {
             let result = Cli::try_parse_from(args.iter());

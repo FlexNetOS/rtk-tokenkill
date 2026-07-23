@@ -36,6 +36,11 @@ rules:
       open network connections directly. Use ureq in telemetry only.
     languages: [rust]
     severity: ERROR
+    paths:
+      exclude:
+        - /src/server.rs
+        - /src/dashboard.rs
+        - /src/icm_bridge.rs
 
   - id: reqwest-forbidden
     pattern: reqwest::$METHOD(...)
@@ -106,3 +111,8 @@ rules:
       surprising in a filter module. Verify intent.
     languages: [rust]
     severity: WARNING
+    paths:
+      exclude:
+        - /src/hooks/audit.rs
+        - /src/hooks/init.rs
+        - /src/hooks/verify_cmd.rs

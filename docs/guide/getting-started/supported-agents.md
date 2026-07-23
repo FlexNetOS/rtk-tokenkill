@@ -40,7 +40,7 @@ Agent runs "cargo test"
 | Factory Droid | Shell hook (`PreToolUse`, matcher `Execute`) | Yes |
 | Cline / Roo Code | Rules file (prompt-level) | N/A |
 | Windsurf | Rules file (prompt-level) | N/A |
-| Codex CLI | AGENTS.md instructions | N/A |
+| Codex CLI | Native `PreToolUse` hook plus AGENTS.md awareness rules; review via `/hooks` | Yes |
 | Kilo Code | Rules file (prompt-level) | N/A |
 | Google Antigravity | Rules file (prompt-level) | N/A |
 | Mistral Vibe | Planned ([#800](https://github.com/rtk-ai/rtk/issues/800)) | Pending upstream |
@@ -123,10 +123,13 @@ Removes only the installed Pi extension file.
 ### OpenClaw
 
 ```bash
-openclaw plugins install ./openclaw
+rtk init --all-agents
 ```
 
-Plugin in the `openclaw/` directory. Uses the `before_tool_call` hook, delegates to `rtk rewrite`.
+The all-agent installer copies the reviewed `openclaw/index.ts` and
+`openclaw/openclaw.plugin.json` into
+`~/.openclaw/extensions/rtk-rewrite/`. It uses the `before_tool_call` hook
+and delegates to `rtk rewrite`. The OpenClaw CLI install remains supported.
 
 ### Hermes
 

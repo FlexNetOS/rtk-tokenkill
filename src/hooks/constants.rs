@@ -10,6 +10,8 @@ pub const BEFORE_TOOL_KEY: &str = "BeforeTool";
 
 /// Native Rust hook command for Claude Code (replaces rtk-rewrite.sh).
 pub const CLAUDE_HOOK_COMMAND: &str = "rtk hook claude";
+/// Native Rust hook command for OpenAI Codex.
+pub const CODEX_HOOK_COMMAND: &str = "rtk hook codex";
 /// Native Rust hook command for Cursor (replaces rtk-rewrite.sh).
 pub const CURSOR_HOOK_COMMAND: &str = "rtk hook cursor";
 /// Native Rust hook command for Factory Droid.
@@ -58,3 +60,7 @@ pub const HERMES_PLUGINS_SUBDIR: &str = "plugins";
 pub const HERMES_PLUGIN_NAME: &str = "rtk-rewrite";
 pub const HERMES_PLUGIN_INIT_FILE: &str = "__init__.py";
 pub const HERMES_PLUGIN_MANIFEST_FILE: &str = "plugin.yaml";
+
+pub const OPENCLAW_DIR: &str = ".openclaw/extensions/rtk-rewrite";
+pub const OPENCLAW_PLUGIN_FILE: &str = "index.ts";
+pub const OPENCLAW_MANIFEST_FILE: &str = "openclaw.plugin.json";
